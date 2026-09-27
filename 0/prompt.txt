@@ -55,3 +55,7 @@ okay lets create a plan.md file to set this all up based on our conversation
 ---
 
 okay lets create a plan.md file to set up the sprite based on our conversation
+
+---
+
+copy the agents.md file from girl-dinner and commit it to this repo
