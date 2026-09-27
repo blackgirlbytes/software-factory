@@ -15,8 +15,10 @@ import sys
 import uuid
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 from urllib.request import Request, urlopen
+
+from sprites import SpritesClient
 
 
 ROOT = Path(__file__).resolve().parent
@@ -83,9 +85,15 @@ class SpritesAPI:
     def create_sprite(self, name: str) -> dict:
         return json.loads(self.request("POST", "/sprites", body={"name": name}))
 
-    def exec(self, name: str, command: list[str]) -> bytes:
-        path = "/sprites/" + quote(name, safe="") + "/exec"
-        return self.request("POST", path, query=[("cmd", arg) for arg in command])
+    def exec(self, name: str, command: list[str]):
+        # The HTTP exec response uses stream framing that cannot be decoded
+        # reliably after HTTP chunks are combined. The SDK uses WebSockets.
+        try:
+            return SpritesClient(self.token).sprite(name).run(
+                *command, capture_output=True, timeout=120
+            )
+        except Exception as error:
+            raise FactoryError(f"Sprite command failed to start: {type(error).__name__}") from None
 
 
 def database() -> sqlite3.Connection:
@@ -191,11 +199,10 @@ def main(argv: list[str] | None = None) -> int:
         command = args.args[1:] if args.args and args.args[0] == "--" else args.args
         if not command:
             raise FactoryError("Pass a command after the project ID, for example: exec demo -- uname -a")
-        output = api.exec(row["sprite_name"], command)
-        sys.stdout.buffer.write(output)
-        if output and not output.endswith(b"\n"):
-            print()
-        return 0
+        result = api.exec(row["sprite_name"], command)
+        sys.stdout.buffer.write(result.stdout or b"")
+        sys.stderr.buffer.write(result.stderr or b"")
+        return result.returncode
     return 1
 
 
