@@ -94,7 +94,7 @@ function summary(row, sprite) {
     state: row.state,
     repo_path: row.repo_path,
     entire_version: row.entire_version,
-    codex_hook_vetted: row.codex_hook_sha256 === entireCodexHookSha256,
+    codex_hook_vetted_at_bootstrap: row.codex_hook_sha256 === entireCodexHookSha256,
   };
   if (sprite) {
     result.sprite_status = sprite.status;
