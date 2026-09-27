@@ -1,0 +1,91 @@
+# Software Factory: Sprite Setup and Build Workflow
+
+## Goal
+
+Build a software factory that can take an open-ended request, research it, plan the work, implement it, review the result against the recorded intent, and produce a tutorial. Girl Dinner is the first end-to-end test, not a template or special case in the factory.
+
+The factory creates and prepares a Fly.io Sprite for each project. A Sprite is the project's persistent development computer. The factory controller runs outside that Sprite so it can track projects and recover an environment even if an agent breaks its workspace.
+
+## Architecture decisions
+
+- **Factory controller:** Owns the user interface, project and run records, task scheduling, and Fly.io credentials. Start it locally for the interview. Store a mapping from project ID to Sprite name, repository, current run, and checkpoint IDs.
+- **Sprite control:** Use the Sprites SDK or REST API for routine create, inspect, execute, checkpoint, and service operations. The hosted Sprites MCP server is optional for an orchestrator that needs to request additional Sprite operations; it is not required for normal provisioning.
+- **Project Sprite:** Holds the repository, installed tools, agent runtime, Entire configuration, session history, and development services. Reuse it for later requests on the same project. Its disk persists across sleep; long-running processes need a restart strategy after a cold wake.
+- **Agent roles:** An orchestrator directs research, planning, building, review, and tutorial writing. Roles describe responsibilities, not fixed app types or a particular coding harness. A web app, CLI, API, or existing repository can follow the same workflow with different tasks and verification.
+- **Harness adapters:** The controller uses one interface for starting or resuming an agent, sending its task, receiving events and results, identifying its session, and checking its capabilities. Codex and Claude Code are the first adapters. Other harnesses can be added without changing the project workflow; a harness must pass a session-capture check before the factory promises intent-based review.
+- **Jev:** Helps choose among bounded scheduling options for tasks that are ready to run. Code enforces task dependencies and file ownership. Jev does not write the plan or override a dependency.
+- **Entire:** Records agent sessions and links their intent to commits. The factory also stores its own run IDs and agent session IDs so it can retrieve the right history for review.
+
+## One-time factory setup
+
+1. Configure a Fly.io organization and a Sprites API token for the controller. Keep the token outside project repositories and outside agent prompts.
+2. Choose and configure the coding harnesses the factory supports, beginning with Codex and Claude Code. Each adapter declares its installation, authentication, session, and tracking requirements. Ensure the Sprite can authenticate to the chosen model providers without committing credentials.
+3. Install or package a known version of the factory's Sprite bootstrap script. The controller records the bootstrap version used for each project.
+4. Create a small controller database for projects, runs, tasks, agent sessions, commits, checkpoints, and external resources. A local SQLite database is sufficient for the first version.
+
+## Project Sprite bootstrap
+
+The controller performs these steps when a new project is requested. Each step should be safe to retry after a failure.
+
+1. Create a Sprite with a stable project-derived name and save that name immediately in the controller database. On later runs, reconnect to the existing Sprite.
+2. Verify the base tools needed for the request. Install Git, Entire, the selected coding harnesses, and project-specific runtimes or packages as needed. Avoid assuming every project uses Node.js.
+3. Create a new Git repository or clone an existing one into the Sprite. Keep a reference repository separate from the output repository when the request is to rebuild an existing product.
+4. Enable Entire **before** starting coding-agent sessions. Install the Entire integration for each selected harness using Entire's agent setup commands. For example, `entire enable --agent codex --no-init-repo` installs Codex's project `.codex/hooks.json`; `entire agent add claude-code` adds Claude Code's integration. Run `entire status --json` and `entire doctor` to check setup and hook drift.
+5. Let each harness adapter handle its own hook or permission requirements. For Codex interactive runs, review and trust hooks through `/hooks`. For fully automated Codex runs in a factory-controlled Sprite, inspect every effective hook source and allow only expected definitions before launching with `--dangerously-bypass-hook-trust`. That flag applies to one invocation and does not grant persistent trust. Do not write Codex's internal trust hashes directly. Do not apply Codex-specific trust flags to other harnesses.
+6. Run a short tracked smoke test for each enabled harness and confirm that Entire captured its session. Do not dispatch an agent when its session capture is missing; report the setup failure.
+7. Take an initial Sprite checkpoint and record its ID. Take further checkpoints before substantial dependency changes, migrations, or other risky experiments.
+
+The factory should use clean, controlled harness configuration inside the Sprite. If it accepts an existing repository, inspect that harness's project configuration before using an automated trust path; a repository may contain hooks unrelated to Entire.
+
+## Harness adapter contract
+
+Each adapter should expose `prepare`, `checkReady`, `startTask`, `resumeTask`, `streamEvents`, `cancelTask`, and `getSessionId` operations. The controller passes the same task record and expected output contract regardless of harness. The adapter translates those into that harness's CLI or SDK calls and returns normalized progress, completion, and failure events. The controller stores both its own task ID and the harness's session ID.
+
+Adapters also declare capabilities: session resume, structured event streaming, subagents, unattended execution, and Entire integration. The scheduler can choose a harness by task or user preference—for example, one for research and another for design—without changing the surrounding workflow. If a harness lacks a required capability, the controller selects a capable adapter or reports the limitation. The reviewer reads Entire history through the same retrieval path regardless of which supported harness produced it.
+
+## Build workflow
+
+1. **Intake:** Save the user's request, target repository or reference material, constraints, and expected deliverables as a run record. Keep the request available to every later stage.
+2. **Research:** Inspect the repository and current documentation for the technologies involved. Record sources, versions, findings, and unresolved questions in the project. Research can run in parallel when topics are independent.
+3. **Plan:** The orchestrator turns the request and research into acceptance criteria and a task graph. A planning agent writes `PLAN.md` in the target repository and commits it before implementation. Changes in direction become explicit plan amendments and commits.
+4. **Schedule:** Code identifies tasks whose prerequisites are complete. Jev may choose parallel or sequential execution among those tasks based on independence, overlapping files, and integration risk. If the tasks overlap or the decision is uncertain, schedule them sequentially.
+5. **Build:** Builders work in the project Sprite. Independent builders use separate Git worktrees or branches and claim their files; the orchestrator integrates their commits. Run appropriate tests and record commands, results, and commit IDs against task IDs.
+6. **Review:** A reviewer compares the original request, committed plan and amendments, Entire session history, code diff, and test evidence. It reports mismatches or defects to builders and verifies the fixes. Review completion requires evidence for each acceptance criterion.
+7. **Deliver:** Produce the requested artifact. For a web app, start a Sprite service for a preview; for other software, return the relevant executable, repository, package, or files. Deployment to an external platform is a separate, recorded step when the request calls for it.
+8. **Teach:** Generate a tutorial from the verified result and the recorded sessions: how the result works, how to run it, the key decisions, and what to change next. Commit the tutorial to the project repository.
+
+Persist run and task state outside the Sprite as each stage completes. A cold Sprite wake loses process memory, so the controller must be able to resume from committed files, Entire records, and its own database. Use a Sprite service for processes that must restart on wake. Use the Sprites Tasks API when an active background run must finish before the Sprite sleeps.
+
+## First validation: rebuild Girl Dinner
+
+Use `/Users/rizelscarlett/Documents/work/girl-dinner` and its GitHub repository as **reference material**. The factory should create a separate target repository and Sprite for the rebuild, leaving the original project unchanged. The request given to the factory should describe the product in ordinary language; the agents may inspect the reference to understand requirements and compare results, but the factory code must contain no Girl Dinner-specific steps.
+
+Girl Dinner exercises several important capabilities:
+
+- Next.js/React application setup and a mobile web experience.
+- Google Places for restaurant discovery and TypeSafe Jev for preference scoring, with local sample data when live services are unavailable.
+- Supabase migrations, persistent group rooms, and realtime updates across phones.
+- Server-only credentials and external deployment on Vercel when deployment is part of the run and the required access is available.
+- A committed plan, Entire-linked implementation sessions, review against the plan, and a tutorial grounded in the actual build history.
+
+The factory should discover these needs from the request, reference repository, and documentation. It must not assume that every future project uses these providers or even produces a web app. Verify the rebuilt app with real build and interaction checks; when external credentials or services are unavailable, distinguish the working local/fixture path from unverified live integrations.
+
+## First implementation milestones
+
+1. Controller creates a Sprite, runs one command, reconnects after idle, and records the Sprite ID.
+2. Bootstrap creates or clones a Git repository, enables Entire for Codex and Claude Code, verifies each harness's hook handling, and captures one session from each.
+3. Orchestrator produces and commits a research-backed `PLAN.md` with acceptance criteria and task dependencies.
+4. Builder completes one task; reviewer uses the diff, plan, and Entire session to evaluate it; a fix can return through the same loop.
+5. Add bounded Jev scheduling and two independent worktrees, then integrate their commits.
+6. Add artifact preview or delivery and a tutorial based on the completed run.
+7. Run the Girl Dinner rebuild as an end-to-end validation, then test a materially different request to prove the workflow is general.
+
+## References
+
+- [Fly.io Sprites overview](https://docs.fly.io/sprites/)
+- [Sprites API and SDK examples](https://sprites.dev/api)
+- [Sprites MCP server](https://docs.fly.io/sprites/integrations/remote-mcp/)
+- [Sprite lifecycle and persistence](https://docs.fly.io/sprites/concepts/lifecycle/)
+- [Sprite services](https://docs.fly.io/sprites/concepts/services/)
+- [Codex hook configuration and trust](https://learn.chatgpt.com/docs/hooks)
+- [Entire CLI setup and agent hooks](https://github.com/entireio/cli#agent-hook-configuration)
