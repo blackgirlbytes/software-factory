@@ -1,3 +1,4 @@
 /.env.local
 /.factory/
+/.venv/
 __pycache__/
