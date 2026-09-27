@@ -1,5 +1,1 @@
-why is it outside the repo..it couuld be inside..and it could just use a gitignroe
-
----
-
 and the name ofthe file is weird
