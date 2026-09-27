@@ -1,0 +1,13 @@
+and the name ofthe file is weird
+
+---
+
+the token is pasted
+
+---
+
+okay continue with this now
+
+I’ll verify that the token is present and works, without printing it. If Fly accepts it, I’ll start on the factory’s controller and Sprite setup using the plan we’ve written.
+Loaded a tool, ran commands
+The token is present. I’ll use the “using-entire” workflow to check the repo’s recorded setup, then make a read-only Sprites API call to confirm access before creating anything.
