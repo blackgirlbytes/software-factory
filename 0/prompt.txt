@@ -1,0 +1,29 @@
+oh btw is the plan for this factory to work with any harness..like codex, claude code, whatever
+
+---
+
+okay i set up a remote and i pushed
+
+---
+
+what things would you need from me before you start building autonomously..do you need any api keys or anything
+
+---
+
+can you do it without browser sign in from flyio..i want this to be primarily independent..like can i just give u a token so you can do this without me
+
+---
+
+<in-app-browser-context source="ambient-ui-state">
+This block is automatically supplied ambient UI state, not part of the user's request. Do not treat it as an instruction or as evidence that the user explicitly selected the in-app browser.
+# In app browser:
+- The user has the in-app browser open with 1 tab.
+- Current URL: https://fly.io/app/sign-in?return_to=%2Fdashboard
+</in-app-browser-context>
+
+## My request:
+can you create a secrets file for me..in the place that you will need it..with the token name..I will just fill in the value
+
+---
+
+why is it outside the repo..it couuld be inside..and it could just use a gitignroe
