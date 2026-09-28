@@ -465,8 +465,9 @@ export async function runWorkflow({ db, client, row, args }) {
     }
     return workflowStatus(db, row.project_id);
   } catch (error) {
+    const blocked = /Codex API quota exceeded|Set (SPRITE_TOKEN|OPENAI_API_KEY|GITHUB_TOKEN)/.test(error.message);
     setStage(db, run.run_id, activeRun(db, row.project_id)?.stage ?? run.stage,
-      { status: 'failed', error: error.message });
+      { status: blocked ? 'blocked' : 'failed', error: error.message });
     throw error;
   }
 }
