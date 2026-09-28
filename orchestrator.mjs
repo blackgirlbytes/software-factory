@@ -82,6 +82,7 @@ async function keepAwake(jobId) {
 function runFactory(job) {
   const args = ['factory.mjs', 'run', job.project_id, '--request', job.request];
   if (job.reference_path) args.push('--reference-path', job.reference_path);
+  if (job.brief_json) args.push('--brief-json', job.brief_json);
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
     activeChild = child;
@@ -164,7 +165,8 @@ const server = createServer(async (request, response) => {
       if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(input.projectId ?? '')) {
         throw new QueueError('Invalid project ID');
       }
-      const run = db.prepare(`SELECT request, reference_path, stage FROM factory_runs
+      workflowStatus(db, input.projectId);
+      const run = db.prepare(`SELECT request, reference_path, brief_json, stage FROM factory_runs
         WHERE project_id = ? AND status != 'complete' ORDER BY created_at DESC LIMIT 1`)
         .get(input.projectId);
       if (!run) throw new QueueError('No unfinished local run was transferred for this project');
@@ -172,11 +174,13 @@ const server = createServer(async (request, response) => {
         throw new QueueError('This run needs its local reference snapshot before remote adoption');
       }
       const job = enqueue(db, { projectId: input.projectId, request: run.request,
-        referencePath: run.reference_path, idempotencyKey: input.idempotencyKey });
+        referencePath: run.reference_path, idempotencyKey: input.idempotencyKey,
+        brief: run.brief_json ? JSON.parse(run.brief_json) : null });
       return reply(response, 202, { job });
     }
     if (request.method === 'POST' && url.pathname === '/jobs') {
       const input = await body(request);
+      if (!input.brief) throw new QueueError('Submit a short demo brief before starting a new job');
       let referencePath = null;
       if (input.referenceSnapshot !== undefined) {
         if (typeof input.idempotencyKey !== 'string'
@@ -197,7 +201,7 @@ const server = createServer(async (request, response) => {
         } else writeFileSync(referencePath, input.referenceSnapshot, { mode: 0o600, flag: 'wx' });
       }
       const job = enqueue(db, { projectId: input.projectId, request: input.request,
-        idempotencyKey: input.idempotencyKey, referencePath });
+        idempotencyKey: input.idempotencyKey, referencePath, brief: input.brief });
       return reply(response, 202, { job });
     }
     if (parts[0] === 'jobs' && parts.length === 2 && request.method === 'GET') {
