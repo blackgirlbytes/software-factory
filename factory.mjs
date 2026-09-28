@@ -344,7 +344,8 @@ async function codexSmoke(db, sprite, projectId, repoPath) {
     session_id: sessionId, shell_command_verified: true, entire_session_captured: true };
 }
 
-async function codexFile(db, sprite, row, relativePath, instruction, { network = false, timeout = 600_000 } = {}) {
+async function codexFile(db, sprite, row, relativePath, instruction,
+  { network = false, timeout = 600_000, branch = 'main' } = {}) {
   const segments = relativePath?.split('/') ?? [];
   if (!relativePath || !/^[A-Za-z0-9._/-]+$/.test(relativePath)
     || segments.some(segment => !segment || segment === '.' || segment === '..')
@@ -388,7 +389,7 @@ async function codexFile(db, sprite, row, relativePath, instruction, { network =
   await remoteRun(sprite, 'git', ['add', '--', relativePath], repoPath);
   await remoteRun(sprite, 'git', ['-c', 'user.name=Software Factory', '-c', 'user.email=factory@localhost',
     'commit', '-m', `Update ${relativePath}`], repoPath);
-  await remoteRun(sprite, 'git', ['push', 'origin', 'main'], repoPath);
+  await remoteRun(sprite, 'git', ['push', 'origin', branch], repoPath);
   const commit = await remoteRun(sprite, 'git', ['log', '-1', '--format=%H%n%B'], repoPath);
   const commitSha = commit.split('\n')[0];
   const checkpointId = commit.match(/^Entire-Checkpoint:\s*(\S+)/m)?.[1];
@@ -612,16 +613,18 @@ async function main(args) {
       console.log(JSON.stringify(summary(project(db, projectId), sprite), null, 2));
       return 0;
     }
-    const row = project(db, projectId);
     if (command === 'run' || command === 'run-status') {
       const { runWorkflow, workflowStatus } = await import('./workflow.mjs');
       if (command === 'run-status') {
         console.log(JSON.stringify(workflowStatus(db, projectId), null, 2));
         return 0;
       }
-      console.log(JSON.stringify(await runWorkflow({ db, client, row, args: rest }), null, 2));
+      const sprite = await provision(db, client, projectId);
+      console.log(JSON.stringify(await runWorkflow({ db, client, sprite,
+        row: project(db, projectId), args: rest }), null, 2));
       return 0;
     }
+    const row = project(db, projectId);
     const sprite = await getSprite(client, row.sprite_name);
     if (!sprite) throw new FactoryError(`Sprite for ${projectId} is missing; state is preserved`);
     if (command === 'status') {
@@ -669,7 +672,8 @@ async function main(args) {
 }
 
 export const factoryInternals = { root, secret, FactoryError, provision, getSprite, project,
-  remoteRun, remoteResult, remoteExists, codexFile, codexRead, githubApi };
+  remoteRun, remoteResult, remoteExists, codexFile, codexRead, githubApi,
+  bootstrap, trustCodexProject };
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
