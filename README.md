@@ -19,7 +19,7 @@ Deployment copies committed factory source, installs dependencies, and restarts 
 
 Only one job runs at a time in this first supervisor. An exhausted Codex quota leaves the job queued for a slow, durable retry (one to six hours between attempts); `control.mjs resume <job-id>` can retry sooner after credits are restored. The supervisor holds a Sprite task lease while work is queued, including during retry delays, so it remains awake until the job runs; that consumes Sprite runtime. Missing credentials remain blocked, and transient transport failures get at most three attempts. `run-status` inside the job response includes project tasks and checkpoints. The Girl Dinner validation is queued at review after the Codex API reported exhausted credits, so the new autonomous path has not yet completed a product run.
 
-Plans for new runs now require each blocking acceptance criterion to cite exact request or reference text. An independent read-only Codex scope audit challenges inferred requirements before building. Optional product ideas are recorded separately and must not become required checks.
+Plans for new runs now require each blocking acceptance criterion to cite exact request or reference text. An independent read-only Codex scope audit challenges inferred requirements before building. Optional product ideas are recorded separately and must not become required checks. Older runs with unsourced plans, including the current Girl Dinner rebuild, amend and audit their plan before review resumes, then rerun verification against the amended contract.
 
 ## Run the controller
 
