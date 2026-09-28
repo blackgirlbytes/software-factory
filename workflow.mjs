@@ -323,7 +323,9 @@ export function selectDemoChecks(plan, criterionIds = null) {
   if (!criterionIds?.length) return checks;
   const wanted = new Set(criterionIds);
   const matching = checks.filter(check => check.criterion_ids.some(id => wanted.has(id)));
-  return matching.length ? matching : checks.filter(check => check.kind === 'smoke');
+  if (matching.length) return matching;
+  const smoke = checks.filter(check => check.kind === 'smoke');
+  return smoke.length ? smoke : checks;
 }
 
 async function checkResult(sprite, argv, cwd, timeout) {
@@ -565,7 +567,13 @@ export async function runWorkflow({ db, client, row, args }) {
               : 'Only directly requested or explicitly referenced behavior may block delivery. ') +
             'Put inferred product ideas in optional_ideas. ' +
             'Tasks must be 1–30 objects {id,file,instruction,depends_on:string[]}; each changes one file. ' +
-            'Checks are command argv arrays for required behavior only. Delivery is {type:"repository"} ' +
+            (run.mode === 'demo'
+              ? 'Checks must be 1–2 objects {id,kind:"smoke"|"build",argv:string[],criterion_ids:string[]}. ' +
+                'Include one smoke command that exercises the approved core flow and names the criterion IDs it covers. ' +
+                'A second build check is optional. Do not use npm test or a whole-suite test command. ' +
+                'The factory installs dependencies separately, so do not put npm install or npm ci in checks. '
+              : 'Checks are command argv arrays for required behavior only. ') +
+            'Delivery is {type:"repository"} ' +
             'or {type:"web",start:argv array,port:number}. Use dependencies and choose a stack from the request and research.' +
             (run.mode === 'demo' ? ' Use at most two mandatory verification commands focused on the demo flow.' + demoPolicy : ''),
             { network: true, runId: run.run_id });
@@ -630,7 +638,8 @@ export async function runWorkflow({ db, client, row, args }) {
     }
     run = activeRun(db, row.project_id);
     if (run.stage === 'verify') {
-      const checks = await verifyBuild(sprite, row, JSON.parse(run.plan_json));
+      const checks = await verifyBuild(sprite, row, JSON.parse(run.plan_json),
+        { demo: run.mode === 'demo' });
       setStage(db, run.run_id, 'review', { verification_json: JSON.stringify(checks) });
     }
     run = activeRun(db, row.project_id);
@@ -639,7 +648,9 @@ export async function runWorkflow({ db, client, row, args }) {
       run = activeRun(db, row.project_id);
       const plan = JSON.parse(run.plan_json);
       let review;
-      for (let round = 0; round < 3; round++) {
+      let repaired = false;
+      const maxRounds = run.mode === 'demo' ? 2 : 3;
+      for (let round = 0; round < maxRounds; round++) {
         const taskSessions = db.prepare(`SELECT session_id, commit_sha, checkpoint_id FROM factory_tasks
           WHERE run_id = ? AND checkpoint_id IS NOT NULL ORDER BY rowid`).all(run.run_id);
         const otherSessions = db.prepare(`SELECT session_id, commit_sha, checkpoint_id FROM agent_sessions
@@ -653,12 +664,14 @@ export async function runWorkflow({ db, client, row, args }) {
           'Use Entire checkpoint explain for checkpoints that clarify implementation intent; do not replay unrelated project history. ' +
           `Verification results: ${run.verification_json}. Check every acceptance criterion and verify claims against code. ` +
           'Reply with only a fenced json object: {"approved": boolean, "summary": string, ' +
-          '"findings": [{"file": repositoryRelativePath, "instruction": specificFix}]}. ' +
+          '"findings": [{"file": repositoryRelativePath, "instruction": specificFix, ' +
+          '"criterion_ids": [approvedAcceptanceCriterionIDs]}]}. ' +
           'If checks failed, approved must be false. Treat optional behavior as optional; ' +
           'a diagnostic outside the approved contract must be skipped by default or moved to ' +
           'a separate opt-in command, even if it currently passes. If a required test covers ' +
           'optional behavior, return a finding to correct the test gate rather than expanding ' +
-          'the product. Do not edit files.' + (run.mode === 'demo' ? demoPolicy : ''),
+          'the product. Each finding must tie to the approved core flow or a failed mandatory check. ' +
+          'Do not edit files.' + (run.mode === 'demo' ? demoPolicy : ''),
           { runId: run.run_id });
         review = extractJson(result.answer);
         review.session_id = result.session_id;
@@ -666,13 +679,30 @@ export async function runWorkflow({ db, client, row, args }) {
           || JSON.parse(run.verification_json).some(check => check.exit_code !== 0))) {
           throw new f.FactoryError('Review cannot approve a build with failed verification checks');
         }
-        if (review.approved && (!Array.isArray(review.findings) || !review.findings.length)) break;
-        if (!Array.isArray(review.findings) || !review.findings.length || round === 2) {
+        if (review.approved && (!Array.isArray(review.findings) || !review.findings.length)) {
+          if (repaired) {
+            const finalChecks = await verifyBuild(sprite, row, plan, { demo: run.mode === 'demo' });
+            setStage(db, run.run_id, 'review', { verification_json: JSON.stringify(finalChecks) });
+            run = activeRun(db, row.project_id);
+            if (finalChecks.some(check => check.exit_code !== 0)) {
+              throw new f.FactoryError('Final demo checks failed after review fixes; inspect run-status');
+            }
+          }
+          break;
+        }
+        if (!Array.isArray(review.findings) || !review.findings.length || round === maxRounds - 1) {
           throw new f.FactoryError('Review did not approve the build; inspect run-status and Sprite');
         }
+        const affectedCriteria = new Set();
         for (const finding of review.findings) {
           if (!safeFile(finding.file) || !finding.instruction?.trim()) {
             throw new f.FactoryError('Review returned an unsafe or incomplete fix');
+          }
+          for (const id of finding.criterion_ids ?? []) {
+            if (!plan.acceptance_criteria.some(criterion => criterion.id === id)) {
+              throw new f.FactoryError(`Review cited an unknown acceptance criterion: ${id}`);
+            }
+            affectedCriteria.add(id);
           }
           const fix = await f.codexFile(db, sprite, row, finding.file,
             forRun(run, `Read ${run.brief_json ? 'BRIEF.md and ' : ''}PLAN.md. ${finding.instruction}`),
@@ -683,9 +713,14 @@ export async function runWorkflow({ db, client, row, args }) {
             setStage(db, run.run_id, 'review', { builder_session: fix.session_id });
           }
         }
-        const checks = await verifyBuild(sprite, row, plan);
+        const checks = await verifyBuild(sprite, row, plan,
+          { demo: run.mode === 'demo', criterionIds: run.mode === 'demo' ? [...affectedCriteria] : null });
         setStage(db, run.run_id, 'review', { verification_json: JSON.stringify(checks) });
         run = activeRun(db, row.project_id);
+        repaired = true;
+        if (run.mode === 'demo' && checks.some(check => check.exit_code !== 0)) {
+          throw new f.FactoryError('Targeted demo check failed after review fix; inspect run-status');
+        }
       }
       const report = `# Review\n\nRequest: ${run.request}\n\nReviewer session: ${review.session_id}\n\n` +
         `## Verdict\n\n${review.summary}\n\nApproved: ${review.approved}\n\n` +
