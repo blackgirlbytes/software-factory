@@ -4,7 +4,8 @@ import { execFileSync } from 'node:child_process';
 import { resolve, join, extname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ExecError } from '@fly/sprites';
-import { factoryInternals as f } from './factory.mjs';
+let f;
+export function configureWorkflow(internals) { f = internals; }
 
 const allowedText = new Set(['.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.json', '.md',
   '.css', '.html', '.sql', '.toml', '.yaml', '.yml', '.py', '.go', '.rs', '.sh']);
