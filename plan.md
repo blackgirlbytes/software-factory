@@ -8,7 +8,7 @@ The factory creates and prepares a Fly.io Sprite for each project. A Sprite is t
 
 ## Architecture decisions
 
-- **Factory controller:** Owns the user interface, project and run records, task scheduling, and Fly.io credentials. Start it locally for the interview. Store a mapping from project ID to Sprite name, repository, current run, and checkpoint IDs.
+- **Factory controller:** Owns the user interface, project and run records, task scheduling, Fly.io credentials, GitHub repository creation, and Git commits and pushes for sandboxed Codex runs. Start it locally for the interview. Store a mapping from project ID to Sprite name, repository, current run, and checkpoint IDs.
 - **Sprite control:** Use the Sprites SDK or REST API for routine create, inspect, execute, checkpoint, and service operations. The hosted Sprites MCP server is optional for an orchestrator that needs to request additional Sprite operations; it is not required for normal provisioning.
 - **Project Sprite:** Holds the repository, installed tools, agent runtime, Entire configuration, session history, and development services. Reuse it for later requests on the same project. Its disk persists across sleep; long-running processes need a restart strategy after a cold wake.
 - **Agent roles:** An orchestrator directs research, planning, building, review, and tutorial writing. Roles describe responsibilities, not fixed app types or a particular coding harness. A web app, CLI, API, or existing repository can follow the same workflow with different tasks and verification.
@@ -19,9 +19,10 @@ The factory creates and prepares a Fly.io Sprite for each project. A Sprite is t
 ## One-time factory setup
 
 1. Configure a Fly.io organization and a Sprites API token for the controller. Keep the token outside project repositories and outside agent prompts.
-2. Install a known official Codex CLI version in each Sprite and authenticate it with an OpenAI API key supplied by the controller through login input. Keep the key out of command arguments, prompts, and Git. Verify that Codex can actually run shell commands; a successful text reply alone is insufficient.
-3. Install or package a known version of the factory's Sprite bootstrap script. The controller records the bootstrap version used for each project.
-4. Create a small controller database for projects, runs, tasks, agent sessions, commits, checkpoints, and external resources. A local SQLite database is sufficient for the first version.
+2. Authenticate the local GitHub CLI. The controller creates private output repositories and registers a write-enabled deploy key scoped to each repository; the account token stays outside the Sprite.
+3. Install a known official Codex CLI version in each Sprite and authenticate it with an OpenAI API key supplied by the controller through login input. Keep the key out of command arguments, prompts, and Git. Verify that Codex can actually run shell commands; a successful text reply alone is insufficient.
+4. Install or package a known version of the factory's Sprite bootstrap script. The controller records the bootstrap version used for each project.
+5. Create a small controller database for projects, runs, tasks, agent sessions, commits, checkpoints, and external resources. A local SQLite database is sufficient for the first version.
 
 ## Project Sprite bootstrap
 
@@ -29,9 +30,9 @@ The controller performs these steps when a new project is requested. Each step s
 
 1. Create a Sprite with a stable project-derived name and save that name immediately in the controller database. On later runs, reconnect to the existing Sprite.
 2. Verify the base tools needed for the request. Install Git, Entire, Codex, and project-specific runtimes or packages as needed. Avoid assuming every product uses Node.js.
-3. Create a new Git repository or clone an existing one into the Sprite. Keep a reference repository separate from the output repository when the request is to rebuild an existing product.
+3. For new work, create a private GitHub output repository, initialize Git in the Sprite, register a repository-scoped deploy key, and connect `origin`. Clone an existing repository only when explicitly supplied as the target. Keep a reference repository separate from the output repository when rebuilding an existing product.
 4. Enable Entire **before** starting coding-agent sessions. `entire enable --agent codex --no-init-repo` installs Codex's project `.codex/hooks.json`. Run `entire status --json` and `entire doctor` to check setup and hook drift.
-5. For interactive Codex runs, review and trust hooks through `/hooks`. For fully automated runs in a factory-controlled Sprite, inspect every effective hook source and allow only expected definitions before launching with `--dangerously-bypass-hook-trust`. That flag applies to one invocation and does not grant persistent trust. Do not write Codex's internal trust hashes directly. The bundled Codex is missing a shell helper, so use the official CLI. Drop the Sprite process's inherited Linux capabilities with `setpriv` before launching Codex; this lets its Bubblewrap sandbox run. Use a read-only sandbox for research and smoke tests, and verify a bounded writable mode before builders edit code.
+5. Install a generic `AGENTS.md` in every factory-created repository and push it. It requires a commit and push after each file change. For interactive Codex runs, review and trust hooks through `/hooks`. For fully automated runs in a factory-controlled Sprite, inspect every effective hook source and allow only expected definitions before launching with `--dangerously-bypass-hook-trust`. That flag applies to one invocation and does not grant persistent trust. Do not write Codex's internal trust hashes directly. The bundled Codex is missing a shell helper, so use the official CLI. Drop the Sprite process's inherited Linux capabilities with `setpriv` before launching Codex; this lets its Bubblewrap sandbox run. Use a read-only sandbox for research and smoke tests and `workspace-write` for one-file edits. Because `.git` is protected in that sandbox, the controller stages only that file, commits it, pushes it, and records its Entire checkpoint before starting another file task.
 6. Run a short tracked Codex smoke test that executes a shell command and confirm that Entire captured its session. Do not dispatch an agent when its shell tool or session capture fails; report the setup failure.
 7. Take an initial Sprite checkpoint and record its ID. Take further checkpoints before substantial dependency changes, migrations, or other risky experiments.
 
@@ -47,9 +48,9 @@ The runner declares capabilities such as session resume, structured event stream
 
 1. **Intake:** Save the user's request, target repository or reference material, constraints, and expected deliverables as a run record. Keep the request available to every later stage.
 2. **Research:** Inspect the repository and current documentation for the technologies involved. Record sources, versions, findings, and unresolved questions in the project. Research can run in parallel when topics are independent.
-3. **Plan:** The orchestrator turns the request and research into acceptance criteria and a task graph. A planning agent writes `PLAN.md` in the target repository and commits it before implementation. Changes in direction become explicit plan amendments and commits.
+3. **Plan:** The orchestrator turns the request and research into acceptance criteria and a task graph. A planning agent writes `PLAN.md` in the target repository; the controller commits and pushes it before implementation. Changes in direction become explicit plan amendments and commits.
 4. **Schedule:** Code identifies tasks whose prerequisites are complete. Jev may choose parallel or sequential execution among those tasks based on independence, overlapping files, and integration risk. If the tasks overlap or the decision is uncertain, schedule them sequentially.
-5. **Build:** Builders work in the project Sprite. Independent builders use separate Git worktrees or branches and claim their files; the orchestrator integrates their commits. Run appropriate tests and record commands, results, and commit IDs against task IDs.
+5. **Build:** Builders work in the project Sprite one file at a time. The controller validates the changed file, commits and pushes it, and records the session and checkpoint before dispatching the next file. Independent builders use separate Git worktrees or branches and claim their files; the orchestrator integrates their commits. Run appropriate tests and record commands, results, and commit IDs against task IDs.
 6. **Review:** A reviewer compares the original request, committed plan and amendments, Entire session history, code diff, and test evidence. It reports mismatches or defects to builders and verifies the fixes. Review completion requires evidence for each acceptance criterion.
 7. **Deliver:** Produce the requested artifact. For a web app, start a Sprite service for a preview; for other software, return the relevant executable, repository, package, or files. Deployment to an external platform is a separate, recorded step when the request calls for it.
 8. **Teach:** Generate a tutorial from the verified result and the recorded sessions: how the result works, how to run it, the key decisions, and what to change next. Commit the tutorial to the project repository.
@@ -73,7 +74,7 @@ The factory should discover these needs from the request, reference repository, 
 ## First implementation milestones
 
 1. Controller creates a Sprite, runs one command, reconnects after idle, and records the Sprite ID.
-2. Bootstrap creates or clones a Git repository, enables Entire for Codex, verifies hook handling, authenticates Codex, runs a shell command, and captures its session.
+2. Bootstrap creates a private target repository and Sprite or clones an explicitly supplied target, enables Entire for Codex, installs agent rules for factory-created repositories, verifies hook handling, authenticates Codex, runs a shell command, and captures its session. A one-file Codex edit is committed and pushed with its checkpoint.
 3. Orchestrator produces and commits a research-backed `PLAN.md` with acceptance criteria and task dependencies.
 4. Builder completes one task; reviewer uses the diff, plan, and Entire session to evaluate it; a fix can return through the same loop.
 5. Add bounded Jev scheduling and two independent worktrees, then integrate their commits.
