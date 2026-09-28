@@ -389,6 +389,10 @@ export async function runWorkflow({ db, client, row, args }) {
           'If checks failed, approved must be false. Do not edit files.');
         review = extractJson(result.answer);
         review.session_id = result.session_id;
+        if (review.approved && (!Array.isArray(JSON.parse(run.verification_json))
+          || JSON.parse(run.verification_json).some(check => check.exit_code !== 0))) {
+          throw new f.FactoryError('Review cannot approve a build with failed verification checks');
+        }
         if (review.approved && (!Array.isArray(review.findings) || !review.findings.length)) break;
         if (!Array.isArray(review.findings) || !review.findings.length || round === 2) {
           throw new f.FactoryError('Review did not approve the build; inspect run-status and Sprite');
