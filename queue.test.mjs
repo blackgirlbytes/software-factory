@@ -91,6 +91,7 @@ test('a workflow saves approved intent before contacting a project Sprite', asyn
     assert.equal(saved.review_repairs, 0);
     assert.equal(saved.timings[0].stage, 'bootstrap');
     assert.equal(saved.timings[0].outcome, 'failed');
+    assert.equal(saved.stage_elapsed_ms, null);
     await assert.rejects(runWorkflow({ db, client: {}, row,
       args: ['--request', request, '--brief-json', JSON.stringify({ ...brief, exclusions: 'No editing' })] }),
     /different approved brief/);
@@ -168,4 +169,40 @@ test('dependency install is reused until the package manifest or lock changes', 
   digest = 'changed manifest or lock digest';
   await verifyBuild(sprite, row, plan, { demo: true });
   assert.equal(commands.filter(args => args[0] === 'npm' && args[1] === 'ci').length, 2);
+});
+
+test('a resumed demo cannot spend a second review repair pass', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'factory-repairs-'));
+  const db = openQueue(join(dir, 'state.sqlite3'));
+  try {
+    workflowStatus(db, 'repair-demo');
+    db.exec(`CREATE TABLE agent_sessions (
+      session_id TEXT, commit_sha TEXT, checkpoint_id TEXT, run_id TEXT, created_at TEXT
+    )`);
+    const request = 'Add a task and show the task list';
+    const brief = normalizeBrief({}, request, false);
+    db.prepare(`INSERT INTO factory_runs
+      (run_id, project_id, request, stage, status, mode, brief_json, plan_json,
+       verification_json, review_repairs)
+      VALUES (?, ?, ?, 'review', 'failed', 'demo', ?, ?, ?, 1)`)
+      .run('repair-run', 'repair-demo', request, JSON.stringify(brief),
+        JSON.stringify(demoPlan()), JSON.stringify([{ exit_code: 0 }]));
+    let edits = 0;
+    configureWorkflow({ FactoryError: class FactoryError extends Error {},
+      getSprite: async () => ({}),
+      codexRead: async () => ({ session_id: 'review-session', answer: `\`\`\`json\n${JSON.stringify({
+        approved: false, summary: 'Core flow needs repair',
+        findings: [{ file: 'app.mjs', instruction: 'Fix the flow', criterion_ids: ['core'] }],
+      })}\n\`\`\`` }),
+      codexFile: async () => { edits += 1; },
+    });
+    await assert.rejects(runWorkflow({ db, client: {},
+      row: { project_id: 'repair-demo', repo_path: '/repo', sprite_name: 'repair-demo' },
+      args: ['--request', request, '--brief-json', JSON.stringify(brief)] }), /repair limit/);
+    assert.equal(edits, 0);
+    assert.equal(workflowStatus(db, 'repair-demo').review_repairs, 1);
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
