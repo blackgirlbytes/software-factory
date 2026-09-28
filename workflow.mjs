@@ -560,7 +560,7 @@ export async function runWorkflow({ db, client, row, args }) {
     }
     run = activeRun(db, row.project_id);
     if (run.stage === 'review') {
-      await reconcileLegacyScope(db, sprite, row, run);
+      if (run.mode === 'legacy') await reconcileLegacyScope(db, sprite, row, run);
       run = activeRun(db, row.project_id);
       const plan = JSON.parse(run.plan_json);
       let review;
