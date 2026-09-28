@@ -7,3 +7,4 @@
 - Stage only the change you made. Do not include unrelated or pre-existing changes in the commit.
 - Do not commit secrets, credentials, or files ignored by Git. If a change cannot be committed safely, explain the blocker to the user.
 - If the commit cannot be pushed, explain the blocker to the user before changing another file.
+- In a factory-managed Codex run, `.git` is protected by the sandbox. Change only the one file assigned, then stop. The factory controller must commit and push it before starting another file task. Outside that sandbox, commit and push it yourself.
