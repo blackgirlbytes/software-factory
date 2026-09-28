@@ -614,7 +614,8 @@ async function main(args) {
       return 0;
     }
     if (command === 'run' || command === 'run-status') {
-      const { runWorkflow, workflowStatus } = await import('./workflow.mjs');
+      const { configureWorkflow, runWorkflow, workflowStatus } = await import('./workflow.mjs');
+      configureWorkflow(factoryInternals);
       if (command === 'run-status') {
         console.log(JSON.stringify(workflowStatus(db, projectId), null, 2));
         return 0;
