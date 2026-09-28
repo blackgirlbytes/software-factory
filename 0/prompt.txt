@@ -1,0 +1,5 @@
+apply it to repositories the factory create
+
+---
+
+ok should we see if the factory works end to end
