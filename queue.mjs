@@ -85,7 +85,8 @@ export function finishJob(db, jobId, { status, code = null, error = null, retryA
 export function resumeBlocked(db, jobId) {
   const changed = db.prepare(`UPDATE autonomy_jobs SET status = 'queued', not_before_ms = 0,
     error_code = NULL, error = NULL, finished_at = NULL, updated_at = CURRENT_TIMESTAMP
-    WHERE job_id = ? AND status IN ('blocked', 'failed')`).run(jobId).changes;
-  if (!changed) throw new QueueError('Job is not blocked or failed');
+    WHERE job_id = ? AND (status IN ('blocked', 'failed')
+      OR (status = 'queued' AND error_code = 'usage_limit_exceeded'))`).run(jobId).changes;
+  if (!changed) throw new QueueError('Job is not blocked, failed, or waiting for credits');
   return getJob(db, jobId);
 }
