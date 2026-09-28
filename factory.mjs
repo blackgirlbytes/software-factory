@@ -54,7 +54,7 @@ function database() {
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`);
   const sessionColumns = new Set(db.prepare('PRAGMA table_info(agent_sessions)').all().map(row => row.name));
-  for (const name of ['commit_sha', 'checkpoint_id']) {
+  for (const name of ['commit_sha', 'checkpoint_id', 'run_id']) {
     if (!sessionColumns.has(name)) db.exec(`ALTER TABLE agent_sessions ADD COLUMN ${name} TEXT`);
   }
   const columns = new Set(db.prepare('PRAGMA table_info(projects)').all().map(row => row.name));
@@ -330,9 +330,36 @@ async function authenticateCodex(sprite) {
   }
 }
 
+const readyCodexSprites = new Map();
+async function ensureCodexRuntime(sprite) {
+  const key = sprite.id ?? sprite.name;
+  if (!readyCodexSprites.has(key)) {
+    readyCodexSprites.set(key, (async () => {
+      await prepareCodex(sprite);
+      await authenticateCodex(sprite);
+    })());
+  }
+  try { await readyCodexSprites.get(key); }
+  catch (error) {
+    readyCodexSprites.delete(key);
+    throw error;
+  }
+}
+
+export function codexFileArgs(repoPath, prompt, { network = false, resumeSessionId = null } = {}) {
+  if (resumeSessionId && !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/.test(resumeSessionId)) {
+    throw new FactoryError('Invalid Codex session ID for resume');
+  }
+  const networkConfig = network ? ['-c', 'sandbox_workspace_write.network_access=true'] : [];
+  return resumeSessionId
+    ? ['node', codexScript, 'exec', 'resume', '-c', 'sandbox_mode="workspace-write"',
+      ...networkConfig, '--dangerously-bypass-hook-trust', '--json', resumeSessionId, prompt]
+    : ['node', codexScript, 'exec', '--sandbox', 'workspace-write', ...networkConfig,
+      '--dangerously-bypass-hook-trust', '--json', '-C', repoPath, prompt];
+}
+
 async function codexSmoke(db, sprite, projectId, repoPath) {
-  await prepareCodex(sprite);
-  await authenticateCodex(sprite);
+  await ensureCodexRuntime(sprite);
   await verifyCodexHooks(sprite, repoPath);
   // Sprites inherit ambient capabilities that Bubblewrap rejects. Drop them
   // before launching Codex so its own sandbox can protect the workspace.
@@ -369,7 +396,8 @@ async function codexSmoke(db, sprite, projectId, repoPath) {
 }
 
 async function codexFile(db, sprite, row, relativePath, instruction,
-  { network = false, timeout = 600_000, branch = 'main' } = {}) {
+  { network = false, timeout = 600_000, branch = 'main', runId = null,
+    resumeSessionId = null } = {}) {
   const segments = relativePath?.split('/') ?? [];
   if (!relativePath || !/^[A-Za-z0-9._/-]+$/.test(relativePath)
     || segments.some(segment => !segment || segment === '.' || segment === '..')
@@ -388,25 +416,23 @@ async function codexFile(db, sprite, row, relativePath, instruction,
   if (await remoteRun(sprite, 'git', ['status', '--porcelain=v1', '--untracked-files=all'], repoPath)) {
     throw new FactoryError('Project working tree must be clean before a file task');
   }
-  await prepareCodex(sprite);
-  await authenticateCodex(sprite);
+  await ensureCodexRuntime(sprite);
   await verifyCodexHooks(sprite, repoPath);
   const prompt = `Read AGENTS.md. Change only ${relativePath}. ${instruction.trim()}\n` +
     'After changing that one file, stop. The factory controller will immediately commit and push it because your sandbox protects .git. Do not edit another file or attempt Git metadata changes.';
   const result = await streamedCommand(sprite, 'setpriv', [
     '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all',
-    'node', codexScript, 'exec', '--sandbox', 'workspace-write',
-    ...(network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
-    '--dangerously-bypass-hook-trust', '--json', '-C', repoPath, prompt,
+    ...codexFileArgs(repoPath, prompt, { network, resumeSessionId }),
   ], { cwd: repoPath, timeout });
   const events = String(result.stdout).split(/\r?\n/).filter(Boolean).flatMap(line => {
     try { return [JSON.parse(line)]; } catch { return []; }
   });
-  const sessionId = events.find(event => event.type === 'thread.started')?.thread_id;
+  const sessionId = events.find(event => event.type === 'thread.started')?.thread_id ?? resumeSessionId;
   const tracked = await remoteRun(sprite, 'git', ['diff', '--name-only', 'HEAD'], repoPath);
   const untracked = await remoteRun(sprite, 'git', ['ls-files', '--others', '--exclude-standard'], repoPath);
   const changes = `${tracked}\n${untracked}`.split(/\r?\n/).filter(Boolean);
-  if (result.exitCode !== 0 || !sessionId || changes.length !== 1
+  if (result.exitCode !== 0 || !sessionId || (resumeSessionId && sessionId !== resumeSessionId)
+    || changes.length !== 1
     || changes[0] !== relativePath) {
     const failure = codexFailure(events, `${result.stdout}\n${result.stderr}`);
     if (failure) throw new FactoryError(failure);
@@ -427,20 +453,20 @@ async function codexFile(db, sprite, row, relativePath, instruction,
     throw new FactoryError('Change was pushed but the project working tree is not clean');
   }
   db.prepare(`INSERT OR REPLACE INTO agent_sessions
-    (session_id, project_id, agent, status, commit_sha, checkpoint_id)
-    VALUES (?, ?, 'Codex', 'completed', ?, ?)`).run(sessionId, row.project_id, commitSha, checkpointId);
+    (session_id, project_id, agent, status, commit_sha, checkpoint_id, run_id)
+    VALUES (?, ?, 'Codex', 'completed', ?, ?, ?)`).run(sessionId, row.project_id,
+      commitSha, checkpointId, runId);
   return { project_id: row.project_id, file: relativePath, session_id: sessionId,
     commit_sha: commitSha, checkpoint_id: checkpointId, pushed: true };
 }
 
-async function codexRead(db, sprite, row, prompt, { timeout = 600_000 } = {}) {
+async function codexRead(db, sprite, row, prompt, { timeout = 600_000, runId = null } = {}) {
   if (!row.repo_path) throw new FactoryError('Bootstrap this project before running Codex');
   const repoPath = row.repo_path;
   if (await remoteRun(sprite, 'git', ['status', '--porcelain=v1', '--untracked-files=all'], repoPath)) {
     throw new FactoryError('Project working tree must be clean before a read-only agent task');
   }
-  await prepareCodex(sprite);
-  await authenticateCodex(sprite);
+  await ensureCodexRuntime(sprite);
   await verifyCodexHooks(sprite, repoPath);
   const result = await streamedCommand(sprite, 'setpriv', [
     '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all',
@@ -470,8 +496,8 @@ async function codexRead(db, sprite, row, prompt, { timeout = 600_000 } = {}) {
   if (await remoteRun(sprite, 'git', ['status', '--porcelain=v1', '--untracked-files=all'], repoPath)) {
     throw new FactoryError('Read-only Codex task changed the project working tree');
   }
-  db.prepare(`INSERT OR REPLACE INTO agent_sessions (session_id, project_id, agent, status)
-    VALUES (?, ?, 'Codex', 'completed')`).run(sessionId, row.project_id);
+  db.prepare(`INSERT OR REPLACE INTO agent_sessions (session_id, project_id, agent, status, run_id)
+    VALUES (?, ?, 'Codex', 'completed', ?)`).run(sessionId, row.project_id, runId);
   return { session_id: sessionId, answer };
 }
 

@@ -1,6 +1,7 @@
 /** Durable, single-run-at-a-time queue for the factory supervisor. */
 import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { normalizeBrief, BriefError } from './brief.mjs';
 
 const projectPattern = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
@@ -11,17 +12,19 @@ export function openQueue(path) {
   db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
   db.exec(`CREATE TABLE IF NOT EXISTS autonomy_jobs (
     job_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE,
-    project_id TEXT NOT NULL, request TEXT NOT NULL, reference_path TEXT,
+    project_id TEXT NOT NULL, request TEXT NOT NULL, reference_path TEXT, brief_json TEXT,
     input_hash TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
     not_before_ms INTEGER NOT NULL DEFAULT 0, error_code TEXT, error TEXT,
     started_at TEXT, finished_at TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`);
+  const columns = new Set(db.prepare('PRAGMA table_info(autonomy_jobs)').all().map(row => row.name));
+  if (!columns.has('brief_json')) db.exec('ALTER TABLE autonomy_jobs ADD COLUMN brief_json TEXT');
   return db;
 }
 
-export function enqueue(db, { projectId, request, referencePath = null, idempotencyKey }) {
+export function enqueue(db, { projectId, request, referencePath = null, idempotencyKey, brief = null }) {
   if (!projectPattern.test(projectId ?? '') || typeof request !== 'string'
     || !request.trim() || request.length > 10_000
     || typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(idempotencyKey)
@@ -29,7 +32,16 @@ export function enqueue(db, { projectId, request, referencePath = null, idempote
     throw new QueueError('Invalid project, request, reference path, or idempotency key');
   }
   const normalizedRequest = request.trim();
-  const hash = createHash('sha256').update(JSON.stringify([projectId, normalizedRequest, referencePath])).digest('hex');
+  let normalizedBrief = null;
+  try {
+    if (brief !== null) normalizedBrief = normalizeBrief(brief, normalizedRequest, referencePath !== null);
+  } catch (error) {
+    if (error instanceof BriefError) throw new QueueError(error.message);
+    throw error;
+  }
+  const input = [projectId, normalizedRequest, referencePath];
+  if (normalizedBrief) input.push(normalizedBrief);
+  const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
   const previous = db.prepare('SELECT * FROM autonomy_jobs WHERE idempotency_key = ?').get(idempotencyKey);
   if (previous) {
     if (previous.input_hash !== hash) throw new QueueError('Idempotency key belongs to a different request');
@@ -40,9 +52,9 @@ export function enqueue(db, { projectId, request, referencePath = null, idempote
   if (active) throw new QueueError(`Project already has an unfinished job: ${active.job_id}`);
   const jobId = randomUUID();
   db.prepare(`INSERT INTO autonomy_jobs
-    (job_id, idempotency_key, project_id, request, reference_path, input_hash, status)
-    VALUES (?, ?, ?, ?, ?, ?, 'queued')`).run(jobId, idempotencyKey, projectId,
-    normalizedRequest, referencePath, hash);
+    (job_id, idempotency_key, project_id, request, reference_path, brief_json, input_hash, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'queued')`).run(jobId, idempotencyKey, projectId,
+    normalizedRequest, referencePath, normalizedBrief ? JSON.stringify(normalizedBrief) : null, hash);
   return getJob(db, jobId);
 }
 
