@@ -1,0 +1,33 @@
+ok should we see if the factory works end to end
+
+---
+
+<in-app-browser-context source="ambient-ui-state">
+This block is automatically supplied ambient UI state, not part of the user's request. Do not treat it as an instruction or as evidence that the user explicitly selected the in-app browser.
+# In app browser:
+- The user has the in-app browser open with 1 tab.
+- Current URL: https://github.com/blackgirlbytes/sf-factory-e2e-cli-d59353f6
+</in-app-browser-context>
+
+## My request:
+what project did u guys build in the test repo..cuz this one seems random
+
+---
+
+<in-app-browser-context source="ambient-ui-state">
+This block is automatically supplied ambient UI state, not part of the user's request. Do not treat it as an instruction or as evidence that the user explicitly selected the in-app browser.
+# In app browser:
+- The user has the in-app browser open with 1 tab.
+- Current URL: https://github.com/blackgirlbytes/sf-factory-e2e-cli-d59353f6
+</in-app-browser-context>
+
+## My request:
+and why not end to end
+
+---
+
+why cant the factory do all that? did we go away from the plaan
+
+---
+
+then write it bro..finish the full plan
