@@ -13,6 +13,8 @@ const criterion = {
 test('a directly sourced requirement is blocking', () => {
   const plan = { acceptance_criteria: [criterion], optional_ideas: ['Replay offline votes later.'] };
   assert.equal(validateScope(plan, request), plan);
+  assert.equal(validateScope({ acceptance_criteria: [{ ...criterion, id: 'A1' }] }, request)
+    .acceptance_criteria[0].id, 'A1');
 });
 
 test('an inferred feature cannot cite words absent from the request', () => {
