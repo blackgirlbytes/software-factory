@@ -6,7 +6,9 @@
     "node": ">=24"
   },
   "scripts": {
-    "factory": "node factory.mjs"
+    "factory": "node factory.mjs",
+    "control": "node control.mjs",
+    "test": "node --test queue.test.mjs scope.test.mjs"
   },
   "dependencies": {
     "@fly/sprites": "0.2.3"
