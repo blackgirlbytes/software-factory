@@ -17,7 +17,7 @@ const root = dirname(fileURLToPath(import.meta.url));
 const spriteName = 'sf-software-factory-control';
 const remoteRoot = '/home/sprite/factory';
 const serviceName = 'factory-supervisor';
-const sourceFiles = ['factory.mjs', 'workflow.mjs', 'scope.mjs', 'queue.mjs',
+const sourceFiles = ['factory.mjs', 'workflow.mjs', 'scope.mjs', 'brief.mjs', 'queue.mjs',
   'orchestrator.mjs', 'package.json', 'package-lock.json', 'templates/AGENTS.md'];
 
 function githubToken() {
