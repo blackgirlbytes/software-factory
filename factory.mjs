@@ -301,9 +301,9 @@ async function streamedCommand(sprite, file, args, { cwd, input = '', timeout = 
   });
 }
 
-function codexFailure(events) {
-  const code = events.findLast(event => event.type === 'turn.failed')?.error?.codex_error_info;
-  if (code === 'usage_limit_exceeded') {
+function codexFailure(events, output = '') {
+  const code = events.findLast(event => event.error?.codex_error_info)?.error?.codex_error_info;
+  if (code === 'usage_limit_exceeded' || /quota exceeded|usage_limit_exceeded/i.test(output)) {
     return 'Codex API quota exceeded; add credits or raise the project limit before resuming';
   }
   return code ? `Codex turn failed (${code})` : null;
@@ -408,7 +408,7 @@ async function codexFile(db, sprite, row, relativePath, instruction,
   const changes = `${tracked}\n${untracked}`.split(/\r?\n/).filter(Boolean);
   if (result.exitCode !== 0 || !sessionId || changes.length !== 1
     || changes[0] !== relativePath) {
-    const failure = codexFailure(events);
+    const failure = codexFailure(events, `${result.stdout}\n${result.stderr}`);
     if (failure) throw new FactoryError(failure);
     const lastEvent = events.at(-1)?.type ?? 'none';
     throw new FactoryError(`Codex file task did not change exactly ${relativePath} ` +
@@ -454,7 +454,8 @@ async function codexRead(db, sprite, row, prompt, { timeout = 600_000 } = {}) {
   const answer = events.filter(event => event.type === 'item.completed'
     && event.item?.type === 'agent_message').at(-1)?.item?.text;
   if (result.exitCode !== 0 || !sessionId || !answer) {
-    throw new FactoryError(codexFailure(events) ?? 'Read-only Codex task did not complete');
+    throw new FactoryError(codexFailure(events, `${result.stdout}\n${result.stderr}`)
+      ?? 'Read-only Codex task did not complete');
   }
   let captured = false;
   for (let attempt = 0; attempt < 8; attempt++) {
