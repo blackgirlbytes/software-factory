@@ -8,10 +8,13 @@ The factory controller can run locally or as a supervised service in its own Fly
 
 `control.mjs` deploys the controller to the private `sf-software-factory-control` Sprite. Its supervised service accepts jobs on a loopback-only port, saves them in SQLite, and invokes Codex inside each project's separate Sprite. The local command can exit after submission; the service resumes queued or interrupted work after restart. During a run it creates a renewable Sprite task to keep its controller awake.
 
+Before submitting, the CLI asks four short questions: the core flow someone must be able to demonstrate, what to leave out, which live integrations are truly required, and whether a reference repository is just context or contains required behavior. Press Enter for the shown defaults. For a non-interactive submission, provide the same answers as a JSON object with `--brief-file <path>`; the keys are `coreFlow`, `exclusions`, `liveIntegrations`, and `referenceUse` (`context`, `requirements`, or `none` without a reference). The approved brief is saved with the queued job and committed as `BRIEF.md` in the project repository before research starts.
+
 ```sh
 node control.mjs deploy
 node control.mjs submit my-project --request 'Build a useful app for ...'
 node control.mjs submit another-project --request 'Rebuild this product ...' --reference-path /path/to/reference-repo
+node control.mjs submit scripted-project --request 'Show a simple task list' --brief-file /path/to/demo-brief.json
 node control.mjs jobs
 node control.mjs status <job-id>
 node control.mjs resume <blocked-job-id>
@@ -19,9 +22,9 @@ node control.mjs resume <blocked-job-id>
 
 Deployment copies committed factory source, installs dependencies, and restarts the service. The first deployment imports the local controller database when present; later deployments preserve the remote database. It writes a mode-0600 credential file in the **controller** Sprite containing the Fly and OpenAI keys plus a GitHub token from `GITHUB_TOKEN` or the authenticated local `gh` CLI. Project Sprites do not receive that GitHub account token. Put `TYPESAFE_API_KEY` in the factory's ignored `.env.local` to enable Jev scheduling remotely. A submitted reference repository is converted locally to a bounded tracked-source snapshot before upload; credentials and ignored files are excluded.
 
-Only one job runs at a time in this first supervisor. An exhausted Codex quota leaves the job queued for a slow, durable retry (one to six hours between attempts); `control.mjs resume <job-id>` can retry sooner after credits are restored. The supervisor holds a Sprite task lease while work is queued, including during retry delays, so it remains awake until the job runs; that consumes Sprite runtime. Missing credentials remain blocked, and transient transport failures get at most three attempts. `run-status` inside the job response includes project tasks and checkpoints. The Girl Dinner validation is queued at review after the Codex API reported exhausted credits, so the new autonomous path has not yet completed a product run.
+Only one job runs at a time in this first supervisor. An exhausted Codex quota leaves the job queued for a slow, durable retry (one to six hours between attempts); `control.mjs resume <job-id>` can retry sooner after credits are restored. The supervisor holds a Sprite task lease while work is queued, including during retry delays, so it remains awake until the job runs; that consumes Sprite runtime. Missing credentials remain blocked, and transient transport failures get at most three attempts. `run-status` inside the job response includes project tasks and checkpoints.
 
-Plans for new runs require each blocking acceptance criterion to cite its source. Demo plans treat a reference repository as context rather than a source of additional mandatory features. An independent read-only Codex scope audit challenges inferred requirements before building. Optional product ideas are recorded separately and must not become required checks. Older runs keep their saved scope and use the existing reconciliation path when needed.
+Plans for new runs require each blocking acceptance criterion to cite exact words from the approved core flow. Reference citations are permitted only when the intake marks the reference as requirements. Research stops after at most three sources needed to choose the demo stack or implement required integrations. An independent read-only Codex scope audit challenges inferred requirements before building. Optional product ideas are recorded separately and must not become required checks. Older runs keep their saved scope and use the existing reconciliation path when needed.
 
 ## Run the controller
 
@@ -32,7 +35,7 @@ node factory.mjs provision my-project
 node factory.mjs bootstrap my-project
 node factory.mjs codex-smoke my-project
 node factory.mjs codex-file my-project README.md -- 'Write a project introduction'
-node factory.mjs run my-project --request 'Build a useful app for ...' --reference-path /path/to/reference-repo
+node factory.mjs run my-project --request 'Show a simple task list' --brief-json '{"coreFlow":"Add a task and see it listed","exclusions":"No accounts","liveIntegrations":"None","referenceUse":"none"}'
 node factory.mjs run-status my-project
 node factory.mjs status my-project
 node factory.mjs exec my-project -- git --version
@@ -45,6 +48,6 @@ node factory.mjs projects
 
 The Codex hook check rejects unexpected user or project hook config. It allows only project trust entries in the user config and does not write Codex's hook trust records. The smoke test checks hook sources immediately before using `--dangerously-bypass-hook-trust` for that invocation, as described in the [Codex hook documentation](https://learn.chatgpt.com/docs/hooks). The Sprite's bundled Codex cannot launch its shell helper, so the factory uses the official CLI. The Sprite process inherits Linux capabilities that Bubblewrap rejects; the controller drops those capabilities with `setpriv` before launching Codex in its read-only sandbox.
 
-`run` provisions and bootstraps a project when needed, then uses Codex inside its Sprite to commit `RESEARCH.md` and a `PLAN.md` with acceptance criteria and a dependency graph. It executes each one-file task, runs the plan's checks, reviews the result against the request and Entire sessions, makes bounded one-file fixes, commits `REVIEW.md` and `TUTORIAL.md`, and returns a repository or Sprite web-service delivery. Repeat the same command after a failure to resume its saved run. `run-status` shows task commits, checkpoints, stage, errors, and scheduler decisions. The reference path is a local Git repository used only as read-only source material; it is not the output repository.
+`run` provisions and bootstraps a project when needed, commits the approved `BRIEF.md`, then uses Codex inside its Sprite to commit focused `RESEARCH.md` and a `PLAN.md` with acceptance criteria and a dependency graph. Sequential one-file build tasks and review fixes resume the saved Codex session; each still gets a fresh file-scope, clean-tree, and hook check. Parallel tasks keep separate Sprite Git worktrees and sessions. The factory runs the plan's checks, reviews the result against the approved brief and relevant Entire checkpoints from this run, commits `REVIEW.md` and `TUTORIAL.md`, and returns a repository or Sprite web-service delivery. Repeat the same command and brief after a failure to resume its saved run. `run-status` shows the brief, builder session, task commits, checkpoints, stage, errors, and scheduler decisions. The reference path is a local Git repository used only as read-only source material; it is not the output repository.
 
 Set `TYPESAFE_API_KEY` in the controller environment to let Jev choose between ready independent tasks. The controller enforces dependencies and file ownership, requires at least 0.80 confidence for parallel work, and otherwise runs sequentially. Parallel builds use separate Sprite Git worktrees and push their branches before integration. No TypeSafe key is sent to a Sprite or committed. The workflow needs focused checks of the requested demo flow before claiming a finished build.
