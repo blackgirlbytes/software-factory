@@ -344,7 +344,7 @@ async function codexSmoke(db, sprite, projectId, repoPath) {
     session_id: sessionId, shell_command_verified: true, entire_session_captured: true };
 }
 
-async function codexFile(db, sprite, row, relativePath, instruction) {
+async function codexFile(db, sprite, row, relativePath, instruction, { network = false, timeout = 600_000 } = {}) {
   const segments = relativePath?.split('/') ?? [];
   if (!relativePath || !/^[A-Za-z0-9._/-]+$/.test(relativePath)
     || segments.some(segment => !segment || segment === '.' || segment === '..')
@@ -371,8 +371,9 @@ async function codexFile(db, sprite, row, relativePath, instruction) {
   const result = await streamedCommand(sprite, 'setpriv', [
     '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all',
     'node', codexScript, 'exec', '--sandbox', 'workspace-write',
+    ...(network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
     '--dangerously-bypass-hook-trust', '--json', '-C', repoPath, prompt,
-  ], { cwd: repoPath });
+  ], { cwd: repoPath, timeout });
   const events = String(result.stdout).split(/\r?\n/).filter(Boolean).flatMap(line => {
     try { return [JSON.parse(line)]; } catch { return []; }
   });
@@ -400,6 +401,47 @@ async function codexFile(db, sprite, row, relativePath, instruction) {
     VALUES (?, ?, 'Codex', 'completed', ?, ?)`).run(sessionId, row.project_id, commitSha, checkpointId);
   return { project_id: row.project_id, file: relativePath, session_id: sessionId,
     commit_sha: commitSha, checkpoint_id: checkpointId, pushed: true };
+}
+
+async function codexRead(db, sprite, row, prompt, { timeout = 600_000 } = {}) {
+  if (!row.repo_path) throw new FactoryError('Bootstrap this project before running Codex');
+  const repoPath = row.repo_path;
+  if (await remoteRun(sprite, 'git', ['status', '--porcelain=v1', '--untracked-files=all'], repoPath)) {
+    throw new FactoryError('Project working tree must be clean before a read-only agent task');
+  }
+  await prepareCodex(sprite);
+  await authenticateCodex(sprite);
+  await verifyCodexHooks(sprite, repoPath);
+  const result = await streamedCommand(sprite, 'setpriv', [
+    '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all',
+    'node', codexScript, 'exec', '--sandbox', 'read-only',
+    '--dangerously-bypass-hook-trust', '--json', '-C', repoPath, prompt,
+  ], { cwd: repoPath, timeout });
+  const events = String(result.stdout).split(/\r?\n/).filter(Boolean).flatMap(line => {
+    try { return [JSON.parse(line)]; } catch { return []; }
+  });
+  const sessionId = events.find(event => event.type === 'thread.started')?.thread_id;
+  const answer = events.filter(event => event.type === 'item.completed'
+    && event.item?.type === 'agent_message').at(-1)?.item?.text;
+  if (result.exitCode !== 0 || !sessionId || !answer) {
+    throw new FactoryError('Read-only Codex task did not complete');
+  }
+  let captured = false;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const list = JSON.parse(await remoteRun(sprite, 'entire', ['session', 'list', '--json'], repoPath));
+    if (list.some(session => session.session_id === sessionId && session.turns > 0)) {
+      captured = true;
+      break;
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  if (!captured) throw new FactoryError('Entire did not capture the read-only Codex task');
+  if (await remoteRun(sprite, 'git', ['status', '--porcelain=v1', '--untracked-files=all'], repoPath)) {
+    throw new FactoryError('Read-only Codex task changed the project working tree');
+  }
+  db.prepare(`INSERT OR REPLACE INTO agent_sessions (session_id, project_id, agent, status)
+    VALUES (?, ?, 'Codex', 'completed')`).run(sessionId, row.project_id);
+  return { session_id: sessionId, answer };
 }
 
 async function trustCodexProject(sprite, repoPath) {
@@ -542,7 +584,9 @@ function usage() {
   node factory.mjs exec <project-id> -- <command> [args...]
   node factory.mjs bootstrap <project-id> [--repo-url <git-url>]
   node factory.mjs codex-smoke <project-id>
-  node factory.mjs codex-file <project-id> <file> -- <instruction>`);
+  node factory.mjs codex-file <project-id> <file> -- <instruction>
+  node factory.mjs run <project-id> --request <text> [--reference-path <local-repo>]
+  node factory.mjs run-status <project-id>`);
 }
 
 async function main(args) {
@@ -558,7 +602,7 @@ async function main(args) {
         .map(row => summary(row)), null, 2));
       return 0;
     }
-    if (!['provision', 'status', 'exec', 'bootstrap', 'codex-smoke', 'codex-file'].includes(command) || !projectId) {
+    if (!['provision', 'status', 'exec', 'bootstrap', 'codex-smoke', 'codex-file', 'run', 'run-status'].includes(command) || !projectId) {
       usage();
       return 1;
     }
@@ -569,6 +613,15 @@ async function main(args) {
       return 0;
     }
     const row = project(db, projectId);
+    if (command === 'run' || command === 'run-status') {
+      const { runWorkflow, workflowStatus } = await import('./workflow.mjs');
+      if (command === 'run-status') {
+        console.log(JSON.stringify(workflowStatus(db, projectId), null, 2));
+        return 0;
+      }
+      console.log(JSON.stringify(await runWorkflow({ db, client, row, args: rest }), null, 2));
+      return 0;
+    }
     const sprite = await getSprite(client, row.sprite_name);
     if (!sprite) throw new FactoryError(`Sprite for ${projectId} is missing; state is preserved`);
     if (command === 'status') {
@@ -615,11 +668,16 @@ async function main(args) {
   }
 }
 
-try {
-  process.exitCode = await main(process.argv.slice(2));
-} catch (error) {
-  const message = error instanceof FactoryError ? error.message
-    : `Operation failed (${error.constructor?.name ?? 'Error'}${error.statusCode ? `, HTTP ${error.statusCode}` : ''})`;
-  console.error(`factory: ${message}`);
-  process.exitCode = 1;
+export const factoryInternals = { root, secret, FactoryError, provision, getSprite, project,
+  remoteRun, remoteResult, remoteExists, codexFile, codexRead, githubApi };
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  try {
+    process.exitCode = await main(process.argv.slice(2));
+  } catch (error) {
+    const message = error instanceof FactoryError ? error.message
+      : `Operation failed (${error.constructor?.name ?? 'Error'}${error.statusCode ? `, HTTP ${error.statusCode}` : ''})`;
+    console.error(`factory: ${message}`);
+    process.exitCode = 1;
+  }
 }
