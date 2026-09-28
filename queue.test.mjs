@@ -7,6 +7,7 @@ import { openQueue, enqueue, claimNext, finishJob, getJob, recoverInterrupted,
   resumeBlocked, QueueError } from './queue.mjs';
 import { normalizeBrief, briefDocument, BriefError } from './brief.mjs';
 import { codexFileArgs } from './factory.mjs';
+import { configureWorkflow, runWorkflow, workflowStatus } from './workflow.mjs';
 
 test('a submitted job survives supervisor restart and keeps its identity', () => {
   const dir = mkdtempSync(join(tmpdir(), 'factory-queue-'));
@@ -68,4 +69,29 @@ test('Codex resume preserves the session and writable sandbox', () => {
   assert.ok(args.includes('--dangerously-bypass-hook-trust'));
   assert.equal(args.at(-2), session);
   assert.equal(args.at(-1), 'Edit one file.');
+});
+
+test('a workflow saves approved intent before contacting a project Sprite', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'factory-intake-'));
+  const db = openQueue(join(dir, 'state.sqlite3'));
+  try {
+    configureWorkflow({ FactoryError: class FactoryError extends Error {},
+      getSprite: async () => { throw new Error('offline test stop'); } });
+    const row = { project_id: 'brief-demo', sprite_name: 'brief-demo' };
+    const request = 'Show a task list';
+    await assert.rejects(runWorkflow({ db, client: {}, row,
+      args: ['--request', request] }), /approved brief/);
+    const brief = normalizeBrief({ coreFlow: 'Add a task to the list.' }, request, false);
+    await assert.rejects(runWorkflow({ db, client: {}, row,
+      args: ['--request', request, '--brief-json', JSON.stringify(brief)] }), /offline test stop/);
+    const saved = workflowStatus(db, row.project_id);
+    assert.deepEqual(saved.brief, brief);
+    assert.equal(saved.stage, 'bootstrap');
+    await assert.rejects(runWorkflow({ db, client: {}, row,
+      args: ['--request', request, '--brief-json', JSON.stringify({ ...brief, exclusions: 'No editing' })] }),
+    /different approved brief/);
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
