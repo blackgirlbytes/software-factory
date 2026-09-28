@@ -184,8 +184,11 @@ async function codexSmoke(db, sprite, projectId, repoPath) {
   await prepareCodex(sprite);
   await authenticateCodex(sprite);
   await verifyCodexHooks(sprite, repoPath);
-  const result = await streamedCommand(sprite, 'node', [codexScript, 'exec',
-    '--dangerously-bypass-approvals-and-sandbox', '--dangerously-bypass-hook-trust',
+  // Sprites inherit ambient capabilities that Bubblewrap rejects. Drop them
+  // before launching Codex so its own sandbox can protect the workspace.
+  const result = await streamedCommand(sprite, 'setpriv', [
+    '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all',
+    'node', codexScript, 'exec', '--sandbox', 'read-only', '--dangerously-bypass-hook-trust',
     '--json', '-C', repoPath,
     'Run pwd using a shell command and report its exact output. Do not edit files.'], { cwd: repoPath });
   const events = String(result.stdout).split(/\r?\n/).filter(Boolean).flatMap(line => {
