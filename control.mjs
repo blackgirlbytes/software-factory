@@ -6,9 +6,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { createInterface } from 'node:readline/promises';
+import { stdin, stdout } from 'node:process';
 import { ExecError, SpritesClient } from '@fly/sprites';
 import { factoryInternals as f } from './factory.mjs';
 import { referenceSnapshot } from './workflow.mjs';
+import { normalizeBrief } from './brief.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const spriteName = 'sf-software-factory-control';
@@ -129,19 +132,48 @@ async function call(target, method, path, body) {
   return value;
 }
 
-function parseSubmit(args) {
+async function intake(request, hasReference) {
+  if (!stdin.isTTY || !stdout.isTTY) {
+    throw new Error('Demo intake needs a terminal; use --brief-file <json> for non-interactive submission');
+  }
+  const reader = createInterface({ input: stdin, output: stdout });
+  try {
+    stdout.write(`\nDemo request: ${request}\nPress Enter to keep a shown default.\n`);
+    const coreFlow = await reader.question('What must someone be able to do in the demo? [use request] ');
+    const exclusions = await reader.question('What should the demo leave out? [none specified] ');
+    const liveIntegrations = await reader.question('Which live integrations are required? [none; use fixtures] ');
+    const referenceUse = hasReference
+      ? await reader.question('Reference repo: context or requirements? [context] ')
+      : 'none';
+    return normalizeBrief({ coreFlow, exclusions, liveIntegrations,
+      referenceUse: referenceUse || (hasReference ? 'context' : 'none') }, request, hasReference);
+  } finally {
+    reader.close();
+  }
+}
+
+async function parseSubmit(args) {
   const [projectId, ...rest] = args;
   if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(projectId ?? '')) {
     throw new Error('Pass a lowercase project ID');
   }
   const options = {};
   for (let i = 0; i < rest.length; i += 2) {
-    if (!['--request', '--reference-path', '--idempotency-key'].includes(rest[i])
+    if (!['--request', '--reference-path', '--idempotency-key', '--brief-file'].includes(rest[i])
       || !rest[i + 1] || options[rest[i]]) throw new Error('Invalid submit options');
     options[rest[i]] = rest[i + 1];
   }
   if (!options['--request']?.trim()) throw new Error('Submit requires --request');
-  return { projectId, request: options['--request'].trim(),
+  const request = options['--request'].trim();
+  const hasReference = Boolean(options['--reference-path']);
+  let brief;
+  if (options['--brief-file']) {
+    let supplied;
+    try { supplied = JSON.parse(readFileSync(options['--brief-file'], 'utf8')); }
+    catch { throw new Error('Brief file must contain a JSON object'); }
+    brief = normalizeBrief(supplied, request, hasReference);
+  } else brief = await intake(request, hasReference);
+  return { projectId, request, brief,
     idempotencyKey: options['--idempotency-key'] ?? randomUUID().replaceAll('-', ''),
     ...(options['--reference-path']
       ? { referenceSnapshot: referenceSnapshot(options['--reference-path']) } : {}) };
@@ -149,16 +181,17 @@ function parseSubmit(args) {
 
 async function main([command, ...args]) {
   if (command === 'deploy') return deploy();
+  const submission = command === 'submit' ? await parseSubmit(args) : null;
   const target = await sprite();
   let result;
   if (command === 'health') result = await call(target, 'GET', '/health');
   else if (command === 'jobs') result = await call(target, 'GET', '/jobs');
-  else if (command === 'submit') result = await call(target, 'POST', '/jobs', parseSubmit(args));
+  else if (command === 'submit') result = await call(target, 'POST', '/jobs', submission);
   else if (command === 'adopt' && args.length === 1) result = await call(target, 'POST', '/adopt',
     { projectId: args[0], idempotencyKey: randomUUID().replaceAll('-', '') });
   else if (command === 'status' && args.length === 1) result = await call(target, 'GET', `/jobs/${args[0]}`);
   else if (command === 'resume' && args.length === 1) result = await call(target, 'POST', `/jobs/${args[0]}/resume`);
-  else throw new Error('Use deploy, submit <project> --request <text> [--reference-path <repo>], adopt <project>, jobs, status <job>, resume <job>, or health');
+  else throw new Error('Use deploy, submit <project> --request <text> [--reference-path <repo>] [--brief-file <json>], adopt <project>, jobs, status <job>, resume <job>, or health');
   console.log(JSON.stringify(result, null, 2));
 }
 
