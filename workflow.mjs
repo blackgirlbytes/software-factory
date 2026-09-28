@@ -502,6 +502,8 @@ export function workflowStatus(db, projectId) {
     brief: run.brief_json ? JSON.parse(run.brief_json) : null,
     builder_session: run.builder_session,
     review_repairs: run.review_repairs,
+    stage_elapsed_ms: run.stage_started_ms == null ? null
+      : Math.max(0, Date.now() - run.stage_started_ms),
     error: run.error, tasks: db.prepare('SELECT task_id, file, status, commit_sha, checkpoint_id FROM factory_tasks WHERE run_id = ?')
       .all(run.run_id), decisions: db.prepare('SELECT sequence, mode, source, confidence FROM schedule_decisions WHERE run_id = ?')
       .all(run.run_id), timings: db.prepare(`SELECT stage, duration_ms, outcome, finished_at
@@ -703,6 +705,7 @@ export async function runWorkflow({ db, client, row, args }) {
           'a separate opt-in command, even if it currently passes. If a required test covers ' +
           'optional behavior, return a finding to correct the test gate rather than expanding ' +
           'the product. Each finding must tie to the approved core flow or a failed mandatory check. ' +
+          (run.mode === 'demo' ? 'Return at most two high-impact findings. ' : '') +
           'Do not edit files.' + (run.mode === 'demo' ? demoPolicy : ''),
           { runId: run.run_id });
         review = extractJson(result.answer);
@@ -724,6 +727,9 @@ export async function runWorkflow({ db, client, row, args }) {
         }
         if (!Array.isArray(review.findings) || !review.findings.length || round === maxRounds - 1) {
           throw new f.FactoryError('Review did not approve the build; inspect run-status and Sprite');
+        }
+        if (run.mode === 'demo' && review.findings.length > 2) {
+          throw new f.FactoryError('Demo review returned more than two fixes; narrow the findings');
         }
         if (run.mode === 'demo' && run.review_repairs >= 1) {
           throw new f.FactoryError('Demo repair limit reached; inspect review findings before resuming');
