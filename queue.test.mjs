@@ -7,7 +7,8 @@ import { openQueue, enqueue, claimNext, finishJob, getJob, recoverInterrupted,
   resumeBlocked, QueueError } from './queue.mjs';
 import { normalizeBrief, briefDocument, BriefError } from './brief.mjs';
 import { codexFileArgs } from './factory.mjs';
-import { configureWorkflow, runWorkflow, workflowStatus } from './workflow.mjs';
+import { configureWorkflow, runWorkflow, workflowStatus, validatePlan,
+  selectDemoChecks, verifyBuild } from './workflow.mjs';
 
 test('a submitted job survives supervisor restart and keeps its identity', () => {
   const dir = mkdtempSync(join(tmpdir(), 'factory-queue-'));
@@ -87,6 +88,9 @@ test('a workflow saves approved intent before contacting a project Sprite', asyn
     const saved = workflowStatus(db, row.project_id);
     assert.deepEqual(saved.brief, brief);
     assert.equal(saved.stage, 'bootstrap');
+    assert.equal(saved.review_repairs, 0);
+    assert.equal(saved.timings[0].stage, 'bootstrap');
+    assert.equal(saved.timings[0].outcome, 'failed');
     await assert.rejects(runWorkflow({ db, client: {}, row,
       args: ['--request', request, '--brief-json', JSON.stringify({ ...brief, exclusions: 'No editing' })] }),
     /different approved brief/);
@@ -94,4 +98,73 @@ test('a workflow saves approved intent before contacting a project Sprite', asyn
     db.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+const demoPlan = () => ({
+  acceptance_criteria: [
+    { id: 'core', text: 'Add a task', source: { kind: 'request', quote: 'Add a task' },
+      verification: 'Run the smoke check' },
+    { id: 'list', text: 'Show the task list', source: { kind: 'request', quote: 'show the task list' },
+      verification: 'Build the demo' },
+  ],
+  tasks: [{ id: 'app', file: 'app.mjs', instruction: 'Build the demo', depends_on: [] }],
+  checks: [
+    { id: 'flow', kind: 'smoke', argv: ['node', 'smoke.mjs'], criterion_ids: ['core'] },
+    { id: 'build', kind: 'build', argv: ['npm', 'run', 'build'], criterion_ids: ['list'] },
+  ],
+  delivery: { type: 'repository' },
+});
+
+test('demo verification permits only focused, sourced checks', () => {
+  configureWorkflow({ FactoryError: class FactoryError extends Error {} });
+  const plan = demoPlan();
+  assert.equal(validatePlan(plan, 'Add a task and show the task list', '', 'none', true), plan);
+  assert.deepEqual(selectDemoChecks(plan, ['core']).map(check => check.id), ['flow']);
+  assert.deepEqual(selectDemoChecks(plan, ['unknown']).map(check => check.id), ['flow']);
+  const broad = demoPlan();
+  broad.checks[0].argv = ['npm', 'test'];
+  assert.throws(() => validatePlan(broad, 'Add a task and show the task list', '', 'none', true),
+    /targeted/);
+  const tooMany = demoPlan();
+  tooMany.checks.push({ id: 'extra', kind: 'smoke', argv: ['node', 'extra.mjs'],
+    criterion_ids: ['core'] });
+  assert.throws(() => validatePlan(tooMany, 'Add a task and show the task list', '', 'none', true),
+    /at most two/);
+});
+
+test('dependency install is reused until the package manifest or lock changes', async () => {
+  const repo = '/home/sprite/projects/demo';
+  let digest = 'first manifest and lock digest';
+  let marker = '';
+  let installed = false;
+  const commands = [];
+  const sprite = {
+    filesystem: () => ({
+      readFile: async () => marker,
+      writeFile: async (_path, content) => { marker = content; },
+    }),
+    execFile: async (file, args) => {
+      commands.push([file, ...args]);
+      if (file === 'npm' && args[0] === 'ci') installed = true;
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+  };
+  configureWorkflow({ FactoryError: class FactoryError extends Error {},
+    remoteExists: async (_sprite, path) => [
+      `${repo}/package.json`, `${repo}/.gitignore`, `${repo}/package-lock.json`,
+    ].includes(path) || (path === `${repo}/node_modules` && installed)
+      || (path === '/home/sprite/factory-cache/demo-npm-install.txt' && Boolean(marker)),
+    remoteRun: async (_sprite, command) => command === 'sha256sum' ? digest : '',
+  });
+  const row = { project_id: 'demo', repo_path: repo };
+  const plan = demoPlan();
+  const first = await verifyBuild(sprite, row, plan, { demo: true });
+  assert.deepEqual(first.map(check => check.id), ['dependencies', 'flow', 'build']);
+  const focused = await verifyBuild(sprite, row, plan, { demo: true, criterionIds: ['core'] });
+  assert.deepEqual(focused.map(check => check.id), ['dependencies', 'flow']);
+  assert.equal(focused[0].cached, true);
+  assert.equal(commands.filter(args => args[0] === 'npm' && args[1] === 'ci').length, 1);
+  digest = 'changed manifest or lock digest';
+  await verifyBuild(sprite, row, plan, { demo: true });
+  assert.equal(commands.filter(args => args[0] === 'npm' && args[1] === 'ci').length, 2);
 });
