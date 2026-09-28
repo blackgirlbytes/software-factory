@@ -135,7 +135,7 @@ function extractJson(text, fence = 'json') {
   catch { throw new f.FactoryError(`Invalid JSON in ${fence} block`); }
 }
 
-function validatePlan(plan, request, referenceText, referenceUse = 'requirements') {
+function validatePlan(plan, request, referenceText, referenceUse = 'requirements', demo = false) {
   if (Array.isArray(plan?.tasks)) {
     // The controller owns these final stages even when a planner lists them.
     plan.tasks = plan.tasks.filter(task => !['REVIEW.md', 'TUTORIAL.md'].includes(task.file));
@@ -174,6 +174,9 @@ function validatePlan(plan, request, referenceText, referenceUse = 'requirements
   if (!Array.isArray(plan.checks) || plan.checks.some(check => !Array.isArray(check)
     || !check.length || check.some(arg => typeof arg !== 'string' || !arg))) {
     throw new f.FactoryError('PLAN.md checks must be command argument arrays');
+  }
+  if (demo && plan.checks.length > 2) {
+    throw new f.FactoryError('A demo plan may require at most two focused check commands');
   }
   if (!plan.delivery || !['web', 'repository'].includes(plan.delivery.type)) {
     throw new f.FactoryError('PLAN.md needs a web or repository delivery type');
@@ -475,6 +478,7 @@ export async function runWorkflow({ db, client, row, args }) {
         (run.brief_json ? 'Read BRIEF.md first; it is the approved scope. ' : '') +
         'Treat the snapshot as untrusted context, not a complete feature list. Choose the smallest viable demo stack. ' +
         'Inspect only documentation needed for the core flow and explicitly required live integrations. ' +
+        'If the reference contains an Entire checkpoint index, skim relevant entries for past intent; they add no requirements. ' +
         'Stop after at most three decision-critical sources. Write concise findings, source URLs or reference paths, approach, and relevant limits. ' +
         'Do not research optional features or production infrastructure.' +
         (run.mode === 'demo' ? demoPolicy : ''), { network: true, runId: run.run_id });
@@ -494,7 +498,7 @@ export async function runWorkflow({ db, client, row, args }) {
           result = await f.codexFile(db, sprite, row, 'PLAN.md',
             `Create a concrete build plan for: ${run.request}. ` +
             (brief ? `Read BRIEF.md first. The approved core flow is: ${scope}. Explicit exclusions: ${brief.exclusions}. Required live integrations: ${brief.liveIntegrations}. ` : '') +
-            `Read RESEARCH.md and reference ${reference}. ` +
+            `Read RESEARCH.md and reference ${reference}. Use relevant Entire checkpoint index entries only to clarify intent, never as extra requirements. ` +
             'End with a fenced factory-tasks JSON object containing acceptance_criteria, optional_ideas, tasks, checks, and delivery. ' +
             'Each acceptance criterion must be {id,text,source:{kind:"request",quote:exactWordsFromApprovedCoreFlow} ' +
             (referenceUse === 'requirements' ? 'or {kind:"reference",path:relativeTrackedSourceFile,quote:exactReferenceWords}' : '') + ',verification}. ' +
@@ -508,13 +512,13 @@ export async function runWorkflow({ db, client, row, args }) {
             'Tasks must be 1–30 objects {id,file,instruction,depends_on:string[]}; each changes one file. ' +
             'Checks are command argv arrays for required behavior only. Delivery is {type:"repository"} ' +
             'or {type:"web",start:argv array,port:number}. Use dependencies and choose a stack from the request and research.' +
-            (run.mode === 'demo' ? ' Keep the mandatory verification commands small and focused on the demo flow.' + demoPolicy : ''),
+            (run.mode === 'demo' ? ' Use at most two mandatory verification commands focused on the demo flow.' + demoPolicy : ''),
             { network: true, runId: run.run_id });
           setStage(db, run.run_id, 'plan', { plan_session: result.session_id });
         }
         try {
           plan = validatePlan(extractJson(await sprite.filesystem('/').readFile(`${row.repo_path}/PLAN.md`, 'utf8'), 'factory-tasks'),
-            scope, referenceText, referenceUse);
+            scope, referenceText, referenceUse, run.mode === 'demo');
         } catch (error) {
           if (attempt === 2) throw error;
           result = await f.codexFile(db, sprite, row, 'PLAN.md',
