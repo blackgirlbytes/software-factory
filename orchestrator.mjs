@@ -3,6 +3,7 @@
 import { createServer } from 'node:http';
 import { spawn, execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,24 +42,39 @@ async function body(request) {
 
 async function keepAwake(jobId) {
   if (process.env.FACTORY_ALLOW_NO_TASK === '1') return () => {};
-  const name = `factory-${jobId.slice(0, 12)}`;
-  const task = { name, expire: '1h' };
+  const prefix = `factory-${jobId.slice(0, 8)}-${randomUUID().slice(0, 8)}`;
+  let lease = 0;
+  let currentName = null;
   const renew = async () => {
-    await execFile('sprite-env', ['curl', '-X', 'POST', '/v1/tasks', '-d', JSON.stringify(task)],
+    const nextName = `${prefix}-${lease++}`;
+    await execFile('sprite-env', ['curl', '-X', 'POST', '/v1/tasks',
+      '-d', JSON.stringify({ name: nextName, expire: '1h' })],
       { timeout: 15_000 });
+    const previousName = currentName;
+    currentName = nextName;
+    if (previousName) {
+      try {
+        await execFile('sprite-env', ['curl', '-X', 'DELETE', `/v1/tasks/${previousName}`],
+          { timeout: 15_000 });
+      } catch (error) {
+        console.error(`Could not close Sprite task ${previousName}: ${error.message}`);
+      }
+    }
   };
   await renew();
+  let renewal = Promise.resolve();
   const timer = setInterval(() => {
-    renew().catch(error => {
-      console.error(`Could not renew Sprite task ${name}: ${error.message}`);
+    renewal = renewal.then(renew).catch(error => {
+      console.error(`Could not renew Sprite task for ${jobId}: ${error.message}`);
       activeChild?.kill('SIGTERM');
     });
   }, 20 * 60_000);
   return async () => {
     clearInterval(timer);
-    try { await execFile('sprite-env', ['curl', '-X', 'DELETE', `/v1/tasks/${name}`],
+    await renewal;
+    try { await execFile('sprite-env', ['curl', '-X', 'DELETE', `/v1/tasks/${currentName}`],
       { timeout: 15_000 }); } catch (error) {
-      console.error(`Could not close Sprite task ${name}: ${error.message}`);
+      console.error(`Could not close Sprite task ${currentName}: ${error.message}`);
     }
   };
 }
