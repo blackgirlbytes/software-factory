@@ -299,6 +299,7 @@ export async function runWorkflow({ db, client, row, args }) {
       VALUES (?, ?, ?, ?, 'bootstrap', 'running')`).run(id, row.project_id, input.request, input.referencePath);
     run = activeRun(db, row.project_id);
   }
+  setStage(db, run.run_id, run.stage, { status: 'running', error: null });
   try {
     const sprite = await f.getSprite(client, row.sprite_name);
     if (!sprite) throw new f.FactoryError('Project Sprite is missing');
@@ -314,6 +315,7 @@ export async function runWorkflow({ db, client, row, args }) {
       }
       setStage(db, run.run_id, 'research');
     }
+    run = activeRun(db, row.project_id);
     if (run.stage === 'research') {
       const reference = run.reference_path ? `/home/sprite/references/${run.run_id}.md` : 'none';
       const result = await f.codexFile(db, sprite, row, 'RESEARCH.md',
@@ -323,6 +325,7 @@ export async function runWorkflow({ db, client, row, args }) {
         'Do not claim an integration works without testing it.', { network: true });
       setStage(db, run.run_id, 'plan', { research_session: result.session_id });
     }
+    run = activeRun(db, row.project_id);
     if (run.stage === 'plan') {
       const result = await f.codexFile(db, sprite, row, 'PLAN.md',
         `Create a concrete build plan for: ${run.request}. Read RESEARCH.md and any reference snapshot. ` +
