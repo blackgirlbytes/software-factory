@@ -125,9 +125,11 @@ async function main([command, ...args]) {
   if (command === 'health') result = await call(target, 'GET', '/health');
   else if (command === 'jobs') result = await call(target, 'GET', '/jobs');
   else if (command === 'submit') result = await call(target, 'POST', '/jobs', parseSubmit(args));
+  else if (command === 'adopt' && args.length === 1) result = await call(target, 'POST', '/adopt',
+    { projectId: args[0], idempotencyKey: randomUUID().replaceAll('-', '') });
   else if (command === 'status' && args.length === 1) result = await call(target, 'GET', `/jobs/${args[0]}`);
   else if (command === 'resume' && args.length === 1) result = await call(target, 'POST', `/jobs/${args[0]}/resume`);
-  else throw new Error('Use deploy, submit <project> --request <text> [--reference-path <repo>], jobs, status <job>, resume <job>, or health');
+  else throw new Error('Use deploy, submit <project> --request <text> [--reference-path <repo>], adopt <project>, jobs, status <job>, resume <job>, or health');
   console.log(JSON.stringify(result, null, 2));
 }
 
