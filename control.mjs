@@ -89,19 +89,19 @@ async function deploy() {
 }
 
 async function call(target, method, path, body) {
-  const proxy = await target.proxyPort(0, 8080);
-  try {
-    const address = proxy.localAddr();
-    if (!address) throw new Error('Orchestrator port proxy did not start');
-    const response = await fetch(`http://${address}${path}`, {
-      method, signal: AbortSignal.timeout(30_000),
-      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    const value = await response.json();
-    if (!response.ok) throw new Error(value.error ?? `Orchestrator HTTP ${response.status}`);
-    return value;
-  } finally { proxy.close(); }
+  const args = ['-sS', '-w', '\n%{http_code}', '-X', method];
+  if (body !== undefined) args.push('-H', 'Content-Type: application/json',
+    '--data-binary', JSON.stringify(body));
+  args.push(`http://127.0.0.1:8080${path}`);
+  const result = await target.execFileHTTP('curl', args, { timeout: 45_000 });
+  if (result.exitCode !== 0) throw new Error('Could not reach the orchestrator service');
+  const output = String(result.stdout);
+  const split = output.lastIndexOf('\n');
+  if (split < 0) throw new Error('Orchestrator returned no HTTP status');
+  const code = Number(output.slice(split + 1));
+  const value = JSON.parse(output.slice(0, split));
+  if (code < 200 || code >= 300) throw new Error(value.error ?? `Orchestrator HTTP ${code}`);
+  return value;
 }
 
 function parseSubmit(args) {
