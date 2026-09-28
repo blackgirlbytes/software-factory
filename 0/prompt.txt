@@ -1,0 +1,13 @@
+okay whatt next needs to happen..
+
+---
+
+What about the entire sessions..like what activity will they track..will it track the activity it takes to build girl dinner or is it the activity to build a software factory
+
+---
+
+Does it push the checkpoints up? Does it have a remote repo ..does it have the same AGENTS Md  that we have about committing on every edit
+
+---
+
+apply it to repositories the factory create
