@@ -495,8 +495,10 @@ export async function runWorkflow({ db, client, row, args }) {
           'Reply with only a fenced json object: {"approved": boolean, "summary": string, ' +
           '"findings": [{"file": repositoryRelativePath, "instruction": specificFix}]}. ' +
           'If checks failed, approved must be false. Treat optional behavior as optional; ' +
-          'if a test requires behavior outside the amended contract, return a finding to correct ' +
-          'that test rather than expanding the product. Do not edit files.');
+          'a diagnostic outside the approved contract must be skipped by default or moved to ' +
+          'a separate opt-in command, even if it currently passes. If a required test covers ' +
+          'optional behavior, return a finding to correct the test gate rather than expanding ' +
+          'the product. Do not edit files.');
         review = extractJson(result.answer);
         review.session_id = result.session_id;
         if (review.approved && (!Array.isArray(JSON.parse(run.verification_json))
