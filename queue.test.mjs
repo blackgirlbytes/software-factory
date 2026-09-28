@@ -7,6 +7,7 @@ import { openQueue, enqueue, claimNext, finishJob, getJob, recoverInterrupted,
   resumeBlocked, QueueError } from './queue.mjs';
 import { normalizeBrief, briefDocument, BriefError } from './brief.mjs';
 import { codexFileArgs } from './factory.mjs';
+import { routeCodexTask } from './model-policy.mjs';
 import { configureWorkflow, runWorkflow, workflowStatus, validatePlan,
   selectDemoChecks, verifyBuild } from './workflow.mjs';
 
@@ -72,6 +73,24 @@ test('Codex resume preserves the session and writable sandbox', () => {
   assert.equal(args.at(-1), 'Edit one file.');
 });
 
+test('model routing assigns Astra to orchestration and low effort to routine builders', () => {
+  assert.deepEqual([routeCodexTask('plan').model, routeCodexTask('plan').reasoningEffort],
+    ['gpt-6-astra', 'medium']);
+  assert.deepEqual([routeCodexTask('replan').model, routeCodexTask('replan').reasoningEffort],
+    ['gpt-6-astra', 'high']);
+  assert.deepEqual([routeCodexTask('build').model, routeCodexTask('build').reasoningEffort],
+    ['gpt-6-sol', 'low']);
+  assert.deepEqual([routeCodexTask('build', { complexity: 'simple' }).model,
+    routeCodexTask('build', { complexity: 'simple' }).reasoningEffort],
+    ['gpt-6-luna', 'low']);
+  const session = '12345678-1234-1234-1234-123456789abc';
+  const resumed = codexFileArgs('/home/sprite/projects/demo', 'Fix the finding.',
+    { role: 'review_fix', resumeSessionId: session });
+  assert.deepEqual(resumed.slice(resumed.indexOf('--model'), resumed.indexOf('--model') + 4),
+    ['--model', 'gpt-6-sol', '-c', 'model_reasoning_effort="medium"']);
+  assert.throws(() => routeCodexTask('build', { complexity: 'max' }), /Invalid build complexity/);
+});
+
 test('a workflow saves approved intent before contacting a project Sprite', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'factory-intake-'));
   const db = openQueue(join(dir, 'state.sqlite3'));
@@ -135,6 +154,10 @@ test('demo verification permits only focused, sourced checks', () => {
     criterion_ids: ['core'] });
   assert.throws(() => validatePlan(tooMany, 'Add a task and show the task list', '', 'none', true),
     /one core-flow smoke check/);
+  const invalidComplexity = demoPlan();
+  invalidComplexity.tasks[0].complexity = 'high';
+  assert.throws(() => validatePlan(invalidComplexity, 'Add a task and show the task list', '', 'none', true),
+    /invalid task/);
 });
 
 test('dependency install is reused until the package manifest or lock changes', async () => {
