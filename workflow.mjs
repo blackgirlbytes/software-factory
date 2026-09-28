@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { resolve, join, extname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ExecError } from '@fly/sprites';
-import { validateScope } from './scope.mjs';
+import { validateScope, ScopeError } from './scope.mjs';
 let f;
 export function configureWorkflow(internals) { f = internals; }
 
@@ -290,6 +290,76 @@ async function deliver(sprite, row, plan) {
     events: events.slice(-8) };
 }
 
+async function reconcileLegacyScope(db, sprite, row, run) {
+  const reference = run.reference_path ? `/home/sprite/references/${run.run_id}.md` : null;
+  const referenceText = reference && await f.remoteExists(sprite, reference)
+    ? await sprite.filesystem('/').readFile(reference, 'utf8') : '';
+  const original = JSON.parse(run.plan_json);
+  try {
+    validateScope(original, run.request, referenceText);
+    return;
+  } catch (error) {
+    if (!(error instanceof ScopeError)) throw error;
+  }
+  const taskGraph = plan => JSON.stringify(plan.tasks.map(task =>
+    ({ id: task.id, file: task.file, depends_on: task.depends_on })));
+  let feedback = 'The saved plan predates sourced acceptance criteria.';
+  let requiresEdit = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let edit = null;
+    let candidate;
+    try {
+      candidate = validatePlan(extractJson(await sprite.filesystem('/').readFile(
+        `${row.repo_path}/PLAN.md`, 'utf8'), 'factory-tasks'), run.request, referenceText);
+      if (taskGraph(candidate) !== taskGraph(original)) {
+        throw new f.FactoryError('Scope amendment changed the completed task graph');
+      }
+    } catch (error) {
+      feedback = `Plan validation failed: ${error.message}. Repair the schema without changing completed tasks.`;
+      requiresEdit = true;
+    }
+    if (requiresEdit) {
+      edit = await f.codexFile(db, sprite, row, 'PLAN.md',
+        `Amend PLAN.md against the original request: ${run.request}. ${feedback} ` +
+        'Preserve every existing implementation task ID, file, dependency, and the delivery target. ' +
+        'Make the factory-tasks acceptance_criteria objects {id,text,source,verification}; ' +
+        'source is {kind:"request",quote:exactUserWords} or {kind:"reference",path:relativeFile,quote:exactReferenceWords}. ' +
+        'Only directly requested behavior may block delivery. The reference is context, not a mandate ' +
+        'to reproduce every feature. Move inferred ideas to optional_ideas and remove requirements ' +
+        'and test gates for optional behavior. Record the amendment in prose. Edit only PLAN.md.',
+        { network: true });
+      try {
+        candidate = validatePlan(extractJson(await sprite.filesystem('/').readFile(
+          `${row.repo_path}/PLAN.md`, 'utf8'), 'factory-tasks'), run.request, referenceText);
+        if (taskGraph(candidate) !== taskGraph(original)) {
+          throw new f.FactoryError('Scope amendment changed the completed task graph');
+        }
+      } catch (error) {
+        feedback = `Plan validation failed: ${error.message}. Repair the schema without changing completed tasks.`;
+        if (attempt === 2) throw error;
+        continue;
+      }
+    }
+    const audit = await f.codexRead(db, sprite, row,
+      `Independently audit amended PLAN.md against this original request: ${run.request}. ` +
+      'The reference is context and does not make every feature mandatory. Reject blocking criteria ' +
+      'or checks for inferred behavior. Do not edit files. Return only fenced json: ' +
+      '{"approved":boolean,"unsupported_ids":string[],"reason":string}.');
+    const verdict = extractJson(audit.answer);
+    if (verdict.approved === true && Array.isArray(verdict.unsupported_ids)
+      && verdict.unsupported_ids.length === 0) {
+      setStage(db, run.run_id, 'review', { plan_json: JSON.stringify(candidate),
+        plan_session: edit?.session_id ?? run.plan_session });
+      const checks = await verifyBuild(sprite, row, candidate);
+      setStage(db, run.run_id, 'review', { verification_json: JSON.stringify(checks) });
+      return;
+    }
+    feedback = `Independent scope audit rejected the plan: ${JSON.stringify(verdict)}.`;
+    requiresEdit = true;
+  }
+  throw new f.FactoryError('Could not reconcile legacy plan with the original request');
+}
+
 export function workflowStatus(db, projectId) {
   ensureTables(db);
   const run = db.prepare('SELECT * FROM factory_runs WHERE project_id = ? ORDER BY created_at DESC LIMIT 1')
@@ -411,6 +481,8 @@ export async function runWorkflow({ db, client, row, args }) {
     }
     run = activeRun(db, row.project_id);
     if (run.stage === 'review') {
+      await reconcileLegacyScope(db, sprite, row, run);
+      run = activeRun(db, row.project_id);
       const plan = JSON.parse(run.plan_json);
       let review;
       for (let round = 0; round < 3; round++) {
@@ -422,7 +494,9 @@ export async function runWorkflow({ db, client, row, args }) {
           `Verification results: ${run.verification_json}. Check every acceptance criterion and verify claims against code. ` +
           'Reply with only a fenced json object: {"approved": boolean, "summary": string, ' +
           '"findings": [{"file": repositoryRelativePath, "instruction": specificFix}]}. ' +
-          'If checks failed, approved must be false. Do not edit files.');
+          'If checks failed, approved must be false. Treat optional behavior as optional; ' +
+          'if a test requires behavior outside the amended contract, return a finding to correct ' +
+          'that test rather than expanding the product. Do not edit files.');
         review = extractJson(result.answer);
         review.session_id = result.session_id;
         if (review.approved && (!Array.isArray(JSON.parse(run.verification_json))
