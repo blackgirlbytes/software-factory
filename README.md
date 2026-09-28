@@ -1,6 +1,25 @@
 # Software Factory
 
-The factory controller runs on your computer and manages one persistent Fly.io Sprite per project. Each Sprite holds that project's Git repository and coding tools. The controller keeps its project registry and Codex session IDs in ignored `.factory/state.sqlite3`. It reads `SPRITE_TOKEN` and `OPENAI_API_KEY` from ignored `.env.local`. The Fly token stays in the controller; the OpenAI key is sent through Codex's login input inside the Sprite, never in a command argument or Git commit.
+The factory controller can run locally or as a supervised service in its own Fly.io Sprite. It manages one persistent Sprite per project; each project Sprite holds its Git repository and coding tools. The controller keeps its project registry and Codex session IDs in ignored `.factory/state.sqlite3`. It reads `SPRITE_TOKEN` and `OPENAI_API_KEY` from ignored `.env.local`. The Fly token stays in the controller; the OpenAI key is sent through Codex's login input inside the project Sprite, never in a command argument or Git commit.
+
+## Run autonomously in a Sprite
+
+`control.mjs` deploys the controller to the private `sf-software-factory-control` Sprite. Its supervised service accepts jobs on a loopback-only port, saves them in SQLite, and invokes Codex inside each project's separate Sprite. The local command can exit after submission; the service resumes queued or interrupted work after restart. During a run it creates a renewable Sprite task to keep its controller awake.
+
+```sh
+node control.mjs deploy
+node control.mjs submit my-project --request 'Build a useful app for ...'
+node control.mjs submit another-project --request 'Rebuild this product ...' --reference-path /path/to/reference-repo
+node control.mjs jobs
+node control.mjs status <job-id>
+node control.mjs resume <blocked-job-id>
+```
+
+Deployment copies committed factory source, installs dependencies, and restarts the service. The first deployment imports the local controller database when present; later deployments preserve the remote database. It writes a mode-0600 credential file in the **controller** Sprite containing the Fly and OpenAI keys plus a GitHub token from `GITHUB_TOKEN` or the authenticated local `gh` CLI. Project Sprites do not receive that GitHub account token. Put `TYPESAFE_API_KEY` in the factory's ignored `.env.local` to enable Jev scheduling remotely. A submitted reference repository is converted locally to a bounded tracked-source snapshot before upload; credentials and ignored files are excluded.
+
+Only one job runs at a time in this first supervisor. A job with an exhausted Codex quota becomes `blocked` and does not retry until resumed; transient transport failures get at most three attempts. `run-status` inside the job response includes project tasks and checkpoints. The Girl Dinner validation is currently blocked at review by exhausted Codex API quota, so the new autonomous path has not yet completed a product run.
+
+Plans for new runs now require each blocking acceptance criterion to cite exact request or reference text. An independent read-only Codex scope audit challenges inferred requirements before building. Optional product ideas are recorded separately and must not become required checks.
 
 ## Run the controller
 
