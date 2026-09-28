@@ -43,8 +43,9 @@ export function validateScope(plan, request, referenceSnapshot = '') {
     }
   }
   if (plan.optional_ideas !== undefined && (!Array.isArray(plan.optional_ideas)
-    || plan.optional_ideas.some(item => !nonempty(item)))) {
-    throw new ScopeError('Optional ideas must be nonempty strings');
+    || plan.optional_ideas.some(item => !nonempty(item)
+      && !(item && typeof item === 'object' && nonempty(item.idea) && nonempty(item.reason))))) {
+    throw new ScopeError('Optional ideas must be nonempty strings or {idea, reason} objects');
   }
   return plan;
 }
