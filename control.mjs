@@ -93,7 +93,7 @@ async function call(target, method, path, body) {
   if (body !== undefined) args.push('-H', 'Content-Type: application/json',
     '--data-binary', JSON.stringify(body));
   args.push(`http://127.0.0.1:8080${path}`);
-  const result = await target.execFileHTTP('curl', args, { timeout: 45_000 });
+  const result = await target.execFile('curl', args, { timeout: 45_000 });
   if (result.exitCode !== 0) throw new Error('Could not reach the orchestrator service');
   const output = String(result.stdout);
   const split = output.lastIndexOf('\n');
