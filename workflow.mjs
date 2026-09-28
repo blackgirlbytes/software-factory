@@ -422,7 +422,8 @@ export async function runWorkflow({ db, client, row, args }) {
             `Create a concrete build plan for: ${run.request}. Read RESEARCH.md and reference ${reference}. ` +
             'End with a fenced factory-tasks JSON object containing acceptance_criteria, optional_ideas, tasks, checks, and delivery. ' +
             'Each acceptance criterion must be {id,text,source:{kind:"request",quote:exactUserWords} ' +
-            'or {kind:"reference",path:relativeFile,quote:exactReferenceWords},verification}. ' +
+            'or {kind:"reference",path:relativeTrackedSourceFile,quote:exactReferenceWords},verification}. ' +
+            'A reference path must match a ## file heading inside the snapshot, never the snapshot .md path. ' +
             'Only directly requested or explicitly referenced behavior may block delivery. Put inferred product ideas in optional_ideas. ' +
             'Tasks must be 1–30 objects {id,file,instruction,depends_on:string[]}; each changes one file. ' +
             'Checks are command argv arrays for required behavior only. Delivery is {type:"repository"} ' +
@@ -436,6 +437,7 @@ export async function runWorkflow({ db, client, row, args }) {
           if (attempt === 2) throw error;
           result = await f.codexFile(db, sprite, row, 'PLAN.md',
             `Repair the factory-tasks JSON schema and sourced acceptance criteria. Validation error: ${error.message}. ` +
+            'For a reference citation, use a relative tracked source path from a ## heading inside the snapshot and quote that file exactly. ' +
             'Keep inferred product ideas optional and preserve the one-file task graph.', { network: true });
           continue;
         }
