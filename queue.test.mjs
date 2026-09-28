@@ -28,6 +28,11 @@ test('a submitted job survives supervisor restart and keeps its identity', () =>
     assert.equal(getJob(db, job.job_id).error_code, 'usage_limit_exceeded');
     resumeBlocked(db, job.job_id);
     assert.equal(claimNext(db).attempts, 3);
+    finishJob(db, job.job_id, { status: 'queued', code: 'usage_limit_exceeded',
+      error: 'Waiting for credits', retryAfterMs: 60 * 60_000 });
+    assert.equal(claimNext(db), null);
+    resumeBlocked(db, job.job_id);
+    assert.equal(claimNext(db).attempts, 4);
     finishJob(db, job.job_id, { status: 'complete' });
     assert.equal(getJob(db, job.job_id).status, 'complete');
     db.close();
