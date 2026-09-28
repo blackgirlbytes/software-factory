@@ -13,18 +13,21 @@ const statePath = join(root, '.factory', 'state.sqlite3');
 const projectPattern = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const entireVersionExpected = 'Entire CLI 0.11.3';
 const entireCodexHookSha256 = 'd0ed5dd1cf5d2d269abfdb6c00161b406d0233b7a4bf1ff72f288405b4959b10';
+const codexVersionExpected = 'codex-cli 0.158.0';
+const codexInstallDir = '/home/sprite/.local/share/software-factory-codex';
+const codexScript = `${codexInstallDir}/node_modules/@openai/codex/bin/codex.js`;
 
 class FactoryError extends Error {}
 
-function token() {
-  if (process.env.SPRITE_TOKEN?.trim()) return process.env.SPRITE_TOKEN.trim();
+function secret(name) {
+  if (process.env[name]?.trim()) return process.env[name].trim();
   const path = join(root, '.env.local');
-  if (!existsSync(path)) throw new FactoryError('Set SPRITE_TOKEN in .env.local or the environment');
+  if (!existsSync(path)) throw new FactoryError(`Set ${name} in .env.local or the environment`);
   const values = readFileSync(path, 'utf8').split(/\r?\n/)
-    .filter(line => line.startsWith('SPRITE_TOKEN='))
-    .map(line => line.slice('SPRITE_TOKEN='.length).trim().replace(/^(['"])(.*)\1$/, '$2'));
+    .filter(line => line.startsWith(`${name}=`))
+    .map(line => line.slice(name.length + 1).trim().replace(/^(['"])(.*)\1$/, '$2'));
   if (values.length !== 1 || !values[0]) {
-    throw new FactoryError('.env.local needs exactly one nonempty SPRITE_TOKEN');
+    throw new FactoryError(`.env.local needs exactly one nonempty ${name}`);
   }
   return values[0];
 }
@@ -40,6 +43,13 @@ function database() {
     state TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`);
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_sessions (
+    session_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`);
   const columns = new Set(db.prepare('PRAGMA table_info(projects)').all().map(row => row.name));
   for (const name of ['repo_path', 'entire_version', 'codex_hook_sha256']) {
@@ -124,6 +134,87 @@ async function remoteExists(sprite, path) {
   return (await remoteResult(sprite, 'test', ['-e', path])).exitCode === 0;
 }
 
+async function streamedCommand(sprite, file, args, { cwd, input = '', timeout = 120_000 } = {}) {
+  return await new Promise((resolve, reject) => {
+    const command = sprite.spawn(file, args, { cwd });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      command.kill('SIGTERM');
+      finish(new FactoryError(`Sprite command ${file} timed out`));
+    }, timeout);
+    function finish(error, result) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve(result);
+    }
+    command.stdout.on('data', chunk => { stdout += chunk.toString(); });
+    command.stderr.on('data', chunk => { stderr += chunk.toString(); });
+    command.once('error', error => finish(error));
+    command.once('spawn', () => command.stdin.end(input));
+    command.once('exit', exitCode => finish(null, { exitCode, stdout, stderr }));
+  });
+}
+
+async function prepareCodex(sprite) {
+  const installed = await remoteResult(sprite, 'node', [codexScript, '--version']);
+  if (installed.exitCode === 0 && String(installed.stdout).trim() === codexVersionExpected) return;
+  await remoteRun(sprite, 'npm', ['install', '--prefix', codexInstallDir,
+    '--no-audit', '--no-fund', '@openai/codex@0.158.0']);
+  const result = await remoteResult(sprite, 'node', [codexScript, '--version']);
+  if (result.exitCode !== 0 || String(result.stdout).trim() !== codexVersionExpected) {
+    throw new FactoryError(`Expected ${codexVersionExpected} inside Sprite`);
+  }
+}
+
+async function authenticateCodex(sprite) {
+  const result = await streamedCommand(sprite, 'node', [codexScript, 'login', '--with-api-key'],
+    { input: `${secret('OPENAI_API_KEY')}\n` });
+  if (result.exitCode !== 0) throw new FactoryError('Codex API-key login failed inside Sprite');
+  const status = await remoteResult(sprite, 'node', [codexScript, 'login', 'status']);
+  if (status.exitCode !== 0 || !`${status.stdout}${status.stderr}`.includes('Logged in')) {
+    throw new FactoryError('Codex is not authenticated inside Sprite');
+  }
+}
+
+async function codexSmoke(db, sprite, projectId, repoPath) {
+  await prepareCodex(sprite);
+  await authenticateCodex(sprite);
+  await verifyCodexHooks(sprite, repoPath);
+  const result = await streamedCommand(sprite, 'node', [codexScript, 'exec',
+    '--dangerously-bypass-approvals-and-sandbox', '--dangerously-bypass-hook-trust',
+    '--json', '-C', repoPath,
+    'Run pwd using a shell command and report its exact output. Do not edit files.'], { cwd: repoPath });
+  const events = String(result.stdout).split(/\r?\n/).filter(Boolean).flatMap(line => {
+    try { return [JSON.parse(line)]; } catch { return []; }
+  });
+  const sessionId = events.find(event => event.type === 'thread.started')?.thread_id;
+  const commandWorked = events.some(event => event.type === 'item.completed'
+    && event.item?.type === 'command_execution'
+    && event.item?.exit_code === 0
+    && String(event.item?.aggregated_output).includes(repoPath));
+  if (result.exitCode !== 0 || !sessionId || !commandWorked) {
+    throw new FactoryError('Codex could not run a shell command inside Sprite');
+  }
+  let captured = false;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const list = JSON.parse(await remoteRun(sprite, 'entire', ['session', 'list', '--json'], repoPath));
+    if (list.some(session => session.session_id === sessionId && session.turns > 0)) {
+      captured = true;
+      break;
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  if (!captured) throw new FactoryError('Entire did not capture the Codex session');
+  db.prepare(`INSERT OR REPLACE INTO agent_sessions (session_id, project_id, agent, status)
+    VALUES (?, ?, 'Codex', 'completed')`).run(sessionId, projectId);
+  return { project_id: projectId, codex_version: codexVersionExpected,
+    session_id: sessionId, shell_command_verified: true, entire_session_captured: true };
+}
+
 async function verifyCodexHooks(sprite, repoPath) {
   const config = await sprite.filesystem('/').readFile(`${repoPath}/.codex/hooks.json`, 'utf8');
   const digest = createHash('sha256').update(config).digest('hex');
@@ -132,13 +223,24 @@ async function verifyCodexHooks(sprite, repoPath) {
   }
   const extraSources = [
     '/home/sprite/.codex/hooks.json',
-    '/home/sprite/.codex/config.toml',
     '/home/sprite/.codex/plugins',
     `${repoPath}/.codex/config.toml`,
   ];
   for (const path of extraSources) {
     if (await remoteExists(sprite, path)) {
       throw new FactoryError(`Additional Codex hook source needs review: ${path}`);
+    }
+  }
+  const userConfigPath = '/home/sprite/.codex/config.toml';
+  if (await remoteExists(sprite, userConfigPath)) {
+    const userConfig = await sprite.filesystem('/').readFile(userConfigPath, 'utf8');
+    const lines = userConfig.trim().split(/\r?\n/).filter(Boolean);
+    const trustedProjectsOnly = lines.length % 2 === 0 && lines.every((line, index) =>
+      index % 2 === 0
+        ? /^\[projects\."\/home\/sprite\/projects\/[a-z0-9-]+"\]$/.test(line)
+        : line === 'trust_level = "trusted"');
+    if (!trustedProjectsOnly) {
+      throw new FactoryError('Codex user configuration differs from the vetted project trust setting');
     }
   }
   return digest;
@@ -182,14 +284,13 @@ async function bootstrap(db, sprite, projectId, repoUrl) {
     await remoteRun(sprite, 'entire', ['enable', '--agent', 'codex', '--no-init-repo', '--telemetry=false'], repoPath);
   }
   await remoteRun(sprite, 'entire', ['agent', 'add', 'codex'], repoPath);
-  await remoteRun(sprite, 'entire', ['agent', 'add', 'claude-code'], repoPath);
   const status = JSON.parse(await remoteRun(sprite, 'entire', ['status', '--json'], repoPath));
-  if (!status.enabled || !status.agents.includes('Codex') || !status.agents.includes('Claude Code')) {
-    throw new FactoryError('Entire did not enable both harness integrations');
+  if (!status.enabled || !status.agents.includes('Codex')) {
+    throw new FactoryError('Entire did not enable Codex session tracking');
   }
   await remoteRun(sprite, 'entire', ['doctor'], repoPath);
   const hookSha = await verifyCodexHooks(sprite, repoPath);
-  const files = ['.entire/settings.json', '.entire/.gitignore', '.codex/hooks.json', '.claude/settings.json'];
+  const files = ['.entire/settings.json', '.entire/.gitignore', '.codex/hooks.json'];
   await remoteRun(sprite, 'git', ['add', '--', ...files], repoPath);
   const staged = await remoteResult(sprite, 'git', ['diff', '--cached', '--quiet'], repoPath);
   if (staged.exitCode === 1) {
@@ -201,7 +302,8 @@ async function bootstrap(db, sprite, projectId, repoUrl) {
   db.prepare(`UPDATE projects SET repo_path = ?, entire_version = ?, codex_hook_sha256 = ?,
     updated_at = CURRENT_TIMESTAMP WHERE project_id = ?`)
     .run(repoPath, entireVersion, hookSha, projectId);
-  return { repo_path: repoPath, entire_version: entireVersion, codex_hook_vetted: true };
+  return { repo_path: repoPath, entire_version: entireVersion, codex_hook_vetted: true,
+    codex: await codexSmoke(db, sprite, projectId, repoPath) };
 }
 
 function usage() {
@@ -210,7 +312,8 @@ function usage() {
   node factory.mjs projects
   node factory.mjs status <project-id>
   node factory.mjs exec <project-id> -- <command> [args...]
-  node factory.mjs bootstrap <project-id> [--repo-url <git-url>]`);
+  node factory.mjs bootstrap <project-id> [--repo-url <git-url>]
+  node factory.mjs codex-smoke <project-id>`);
 }
 
 async function main(args) {
@@ -226,11 +329,11 @@ async function main(args) {
         .map(row => summary(row)), null, 2));
       return 0;
     }
-    if (!['provision', 'status', 'exec', 'bootstrap'].includes(command) || !projectId) {
+    if (!['provision', 'status', 'exec', 'bootstrap', 'codex-smoke'].includes(command) || !projectId) {
       usage();
       return 1;
     }
-    const client = new SpritesClient(token());
+    const client = new SpritesClient(secret('SPRITE_TOKEN'));
     if (command === 'provision') {
       const sprite = await provision(db, client, projectId);
       console.log(JSON.stringify(summary(project(db, projectId), sprite), null, 2));
@@ -252,6 +355,11 @@ async function main(args) {
         repoUrl = rest[1];
       }
       console.log(JSON.stringify(await bootstrap(db, sprite, projectId, repoUrl), null, 2));
+      return 0;
+    }
+    if (command === 'codex-smoke') {
+      if (!row.repo_path) throw new FactoryError('Bootstrap this project before running Codex');
+      console.log(JSON.stringify(await codexSmoke(db, sprite, projectId, row.repo_path), null, 2));
       return 0;
     }
     const argv = rest[0] === '--' ? rest.slice(1) : rest;
