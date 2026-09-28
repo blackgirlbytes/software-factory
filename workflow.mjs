@@ -225,7 +225,7 @@ async function buildSequential(db, sprite, row, run, task) {
   const history = run.builder_session
     ? '' : 'Before editing, use the latest relevant Entire checkpoint in this run if it helps you understand prior work. ';
   const result = await f.codexFile(db, sprite, row, task.file,
-    forRun(run, `${history}Read BRIEF.md and PLAN.md. ${task.instruction}`),
+    forRun(run, `${history}Read ${run.brief_json ? 'BRIEF.md and ' : ''}PLAN.md. ${task.instruction}`),
     { network: true, runId: run.run_id, resumeSessionId: run.mode === 'demo' ? run.builder_session : null });
   if (run.mode === 'demo') {
     run.builder_session = result.session_id;
@@ -252,7 +252,7 @@ async function buildParallel(db, sprite, row, run, tasks) {
   }
   const results = await Promise.allSettled(prepared.map(async ({ task, branch, path }) => {
     const result = await f.codexFile(db, sprite, { ...row, repo_path: path }, task.file,
-      forRun(run, `Read BRIEF.md and PLAN.md. ${task.instruction}`),
+      forRun(run, `Read ${run.brief_json ? 'BRIEF.md and ' : ''}PLAN.md. ${task.instruction}`),
       { network: true, branch, runId: run.run_id });
     db.prepare(`UPDATE factory_tasks SET status = 'built', commit_sha = ?, session_id = ?, checkpoint_id = ?
       WHERE run_id = ? AND task_id = ?`).run(result.commit_sha, result.session_id,
@@ -439,6 +439,8 @@ export async function runWorkflow({ db, client, row, args }) {
           }
         } else {
           await sprite.filesystem('/').writeFile(target, content);
+        }
+        if (await f.remoteRun(sprite, 'git', ['status', '--porcelain=v1', '--untracked-files=all'], row.repo_path)) {
           await commitSingleFile(sprite, row.repo_path, 'BRIEF.md', 'Record approved demo brief');
         }
       }
@@ -570,7 +572,8 @@ export async function runWorkflow({ db, client, row, args }) {
         const history = [...taskSessions, ...otherSessions].filter((entry, index, entries) =>
           entries.findIndex(other => other.checkpoint_id === entry.checkpoint_id) === index);
         const result = await f.codexRead(db, sprite, row,
-          `Review this implementation against the approved demo brief: ${run.request}. Read BRIEF.md, PLAN.md, RESEARCH.md, ` +
+          `Review this implementation against the approved ${run.brief_json ? 'demo brief' : 'request'}: ${run.request}. ` +
+          `Read ${run.brief_json ? 'BRIEF.md, ' : ''}PLAN.md, RESEARCH.md, ` +
           `source files, and relevant Entire checkpoint history for this run: ${JSON.stringify(history)}. ` +
           'Use Entire checkpoint explain for checkpoints that clarify implementation intent; do not replay unrelated project history. ' +
           `Verification results: ${run.verification_json}. Check every acceptance criterion and verify claims against code. ` +
@@ -597,7 +600,7 @@ export async function runWorkflow({ db, client, row, args }) {
             throw new f.FactoryError('Review returned an unsafe or incomplete fix');
           }
           const fix = await f.codexFile(db, sprite, row, finding.file,
-            forRun(run, `Read BRIEF.md and PLAN.md. ${finding.instruction}`),
+            forRun(run, `Read ${run.brief_json ? 'BRIEF.md and ' : ''}PLAN.md. ${finding.instruction}`),
             { network: true, runId: run.run_id,
               resumeSessionId: run.mode === 'demo' ? run.builder_session : null });
           if (run.mode === 'demo') {
@@ -619,7 +622,7 @@ export async function runWorkflow({ db, client, row, args }) {
     run = activeRun(db, row.project_id);
     if (run.stage === 'tutorial') {
       await f.codexFile(db, sprite, row, 'TUTORIAL.md',
-        'Write a practical tutorial for this finished project. Read BRIEF.md, PLAN.md, RESEARCH.md, REVIEW.md, implementation files, ' +
+        `Write a practical tutorial for this finished project. Read ${run.brief_json ? 'BRIEF.md, ' : ''}PLAN.md, RESEARCH.md, REVIEW.md, implementation files, ` +
         'and relevant Entire checkpoints for this run. Explain how to run it, how the main flow works, key choices and limitations, ' +
         'and what a developer should change next. Ground claims in the actual verified implementation.' +
         (run.mode === 'demo' ? ' Clearly label demo data and limitations.' : ''),
