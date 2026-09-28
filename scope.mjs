@@ -35,10 +35,8 @@ export function validateScope(plan, request, referenceSnapshot = '') {
       if (start < 0) {
         throw new ScopeError(`Acceptance criterion ${id} references ${source.path}, which is absent from the snapshot headings`);
       }
-      const next = referenceSnapshot.indexOf('\n## ', start + heading.length);
-      const section = referenceSnapshot.slice(start, next < 0 ? undefined : next);
-      if (!normalize(section).includes(normalize(source.quote))) {
-        throw new ScopeError(`Acceptance criterion ${id} must quote exact contiguous text from ${source.path}`);
+      if (!normalize(referenceSnapshot).includes(normalize(source.quote))) {
+        throw new ScopeError(`Acceptance criterion ${id} must quote exact contiguous text from the reference snapshot`);
       }
     } else {
       throw new ScopeError(`Acceptance criterion ${id} must cite the request or reference`);
