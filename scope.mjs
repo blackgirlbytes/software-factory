@@ -13,7 +13,7 @@ export function validateScope(plan, request, referenceSnapshot = '') {
   const ids = new Set();
   for (const criterion of criteria) {
     const { id, text, source, verification } = criterion ?? {};
-    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(id ?? '') || ids.has(id)
+    if (!/^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(id ?? '') || ids.has(id)
       || !nonempty(text) || !nonempty(verification)) {
       throw new ScopeError('Acceptance criteria need unique IDs, text, and verification');
     }
