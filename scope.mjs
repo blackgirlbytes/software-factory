@@ -27,10 +27,18 @@ export function validateScope(plan, request, referenceSnapshot = '') {
       }
     } else if (source.kind === 'reference') {
       if (!nonempty(source.path) || !/^[A-Za-z0-9._/-]+$/.test(source.path)
-        || source.path.split('/').some(part => !part || part === '.' || part === '..')
-        || !referenceSnapshot.includes(`\n## ${source.path}\n`)
-        || !normalize(referenceSnapshot).includes(normalize(source.quote))) {
-        throw new ScopeError(`Acceptance criterion ${id} has an unverified reference quote`);
+        || source.path.split('/').some(part => !part || part === '.' || part === '..')) {
+        throw new ScopeError(`Acceptance criterion ${id} must name a tracked file from a ## heading inside the reference snapshot, not the snapshot path`);
+      }
+      const heading = `\n## ${source.path}\n`;
+      const start = referenceSnapshot.indexOf(heading);
+      if (start < 0) {
+        throw new ScopeError(`Acceptance criterion ${id} references ${source.path}, which is absent from the snapshot headings`);
+      }
+      const next = referenceSnapshot.indexOf('\n## ', start + heading.length);
+      const section = referenceSnapshot.slice(start, next < 0 ? undefined : next);
+      if (!normalize(section).includes(normalize(source.quote))) {
+        throw new ScopeError(`Acceptance criterion ${id} must quote exact contiguous text from ${source.path}`);
       }
     } else {
       throw new ScopeError(`Acceptance criterion ${id} must cite the request or reference`);
