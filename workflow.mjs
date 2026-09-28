@@ -94,6 +94,10 @@ function extractJson(text, fence = 'json') {
 }
 
 function validatePlan(plan) {
+  if (Array.isArray(plan?.tasks)) {
+    // The controller owns these final stages even when a planner lists them.
+    plan.tasks = plan.tasks.filter(task => !['REVIEW.md', 'TUTORIAL.md'].includes(task.file));
+  }
   if (!plan || !Array.isArray(plan.tasks) || !plan.tasks.length || plan.tasks.length > 30) {
     throw new f.FactoryError('PLAN.md needs 1–30 factory tasks');
   }
@@ -102,7 +106,7 @@ function validatePlan(plan) {
   }
   const ids = new Set();
   for (const task of plan.tasks) {
-    if (!/^[a-z0-9-]{1,32}$/.test(task.id ?? '') || ids.has(task.id)
+    if (!/^[a-z0-9_-]{1,32}$/.test(task.id ?? '') || ids.has(task.id)
       || !safeFile(task.file) || !task.instruction?.trim()
       || !Array.isArray(task.depends_on)) {
       throw new f.FactoryError('PLAN.md has an invalid task ID, file, instruction, or dependency list');
@@ -232,7 +236,8 @@ async function buildParallel(db, sprite, row, run, tasks) {
 async function verifyBuild(sprite, row, plan) {
   const repoPath = row.repo_path;
   const results = [];
-  if (await f.remoteExists(sprite, `${repoPath}/package.json`)) {
+  const explicitInstall = plan.checks.some(args => args[0] === 'npm' && args[1] === 'install');
+  if (await f.remoteExists(sprite, `${repoPath}/package.json`) && !explicitInstall) {
     if (!(await f.remoteExists(sprite, `${repoPath}/.gitignore`))) {
       await sprite.filesystem('/').writeFile(`${repoPath}/.gitignore`,
         'node_modules/\n.next/\ndist/\n.env\n.env.*\n!.env.example\n');
@@ -328,7 +333,9 @@ export async function runWorkflow({ db, client, row, args }) {
     }
     run = activeRun(db, row.project_id);
     if (run.stage === 'plan') {
-      const result = await f.codexFile(db, sprite, row, 'PLAN.md',
+      let result = { session_id: run.plan_session };
+      if (!(await f.remoteExists(sprite, `${row.repo_path}/PLAN.md`))) {
+        result = await f.codexFile(db, sprite, row, 'PLAN.md',
         `Create a concrete build plan for: ${run.request}. Read RESEARCH.md and any reference snapshot. ` +
         'Include product behavior, acceptance criteria, dependencies, verification, and delivery. ' +
         'End the file with a fenced factory-tasks JSON block. Its object must have acceptance_criteria (nonempty string array), ' +
@@ -337,6 +344,7 @@ export async function runWorkflow({ db, client, row, args }) {
         'Every task changes exactly one file. Include all files required for a working product; do not include generated lockfiles. ' +
         'Use dependencies when tasks rely on earlier files. Keep the plan generic to this request rather than assuming a framework.',
         { network: true });
+      }
       const plan = validatePlan(extractJson(await sprite.filesystem('/').readFile(`${row.repo_path}/PLAN.md`, 'utf8'), 'factory-tasks'));
       for (const task of plan.tasks) {
         db.prepare(`INSERT OR IGNORE INTO factory_tasks (run_id, task_id, file, status)
