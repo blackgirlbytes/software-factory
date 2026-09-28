@@ -10,6 +10,7 @@ let f;
 export function configureWorkflow(internals) { f = internals; }
 
 const demoPolicy = ' This factory builds runnable demos only. Use the smallest stack that demonstrates the user-requested core flow. Prefer fixture or local data; add a live integration only if the user explicitly needs it for the demo. Do not require production infrastructure, migrations, scaling, or hardening. Research only decisions needed for the demo. Keep mandatory tests focused on core behavior; record other ideas as optional.';
+const demoCheckTimeoutMs = 180_000;
 const forRun = (run, instruction) => run.mode === 'demo' ? `${instruction}${demoPolicy}` : instruction;
 
 const allowedText = new Set(['.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.json', '.md',
@@ -171,12 +172,32 @@ function validatePlan(plan, request, referenceText, referenceUse = 'requirements
     if (!ready.length) throw new f.FactoryError('PLAN.md task dependencies contain a cycle');
     ready.forEach(task => pending.delete(task.id));
   }
-  if (!Array.isArray(plan.checks) || plan.checks.some(check => !Array.isArray(check)
-    || !check.length || check.some(arg => typeof arg !== 'string' || !arg))) {
+  if (!Array.isArray(plan.checks)) throw new f.FactoryError('PLAN.md needs check commands');
+  const commandValid = argv => Array.isArray(argv) && argv.length > 0
+    && argv.every(arg => typeof arg === 'string' && arg.length > 0);
+  if (demo) {
+    const criterionIds = new Set(plan.acceptance_criteria.map(item => item.id));
+    const checkIds = new Set();
+    if (!plan.checks.length || plan.checks.length > 2 || !plan.checks.some(check => check.kind === 'smoke')) {
+      throw new f.FactoryError('A demo needs one core-flow smoke check and at most two focused checks total');
+    }
+    for (const check of plan.checks) {
+      if (!/^[a-z0-9_-]{1,32}$/.test(check?.id ?? '') || checkIds.has(check.id)
+        || !['smoke', 'build'].includes(check.kind) || !commandValid(check.argv)
+        || !Array.isArray(check.criterion_ids) || !check.criterion_ids.length
+        || check.criterion_ids.some(id => !criterionIds.has(id))) {
+        throw new f.FactoryError('Demo checks need unique IDs, smoke/build kind, argv, and approved criterion IDs');
+      }
+      checkIds.add(check.id);
+      const [program, action, target] = check.argv;
+      if ((['npm', 'pnpm', 'yarn'].includes(program) && ['install', 'ci', 'test'].includes(action))
+        || (['npm', 'pnpm', 'yarn'].includes(program) && action === 'run' && target === 'test')
+        || (program === 'node' && action === '--test' && !target)) {
+        throw new f.FactoryError('Demo checks must be targeted; the factory installs dependencies separately');
+      }
+    }
+  } else if (plan.checks.some(check => !commandValid(check))) {
     throw new f.FactoryError('PLAN.md checks must be command argument arrays');
-  }
-  if (demo && plan.checks.length > 2) {
-    throw new f.FactoryError('A demo plan may require at most two focused check commands');
   }
   if (!plan.delivery || !['web', 'repository'].includes(plan.delivery.type)) {
     throw new f.FactoryError('PLAN.md needs a web or repository delivery type');
@@ -291,10 +312,33 @@ async function buildParallel(db, sprite, row, run, tasks) {
   }
 }
 
-async function verifyBuild(sprite, row, plan) {
+function checkSpec(check, index) {
+  return Array.isArray(check)
+    ? { id: `legacy-${index}`, kind: 'legacy', argv: check, criterion_ids: [] }
+    : check;
+}
+
+export function selectDemoChecks(plan, criterionIds = null) {
+  const checks = plan.checks.map(checkSpec);
+  if (!criterionIds?.length) return checks;
+  const wanted = new Set(criterionIds);
+  const matching = checks.filter(check => check.criterion_ids.some(id => wanted.has(id)));
+  return matching.length ? matching : checks.filter(check => check.kind === 'smoke');
+}
+
+async function checkResult(sprite, argv, cwd, timeout) {
+  try { return await sprite.execFile(argv[0], argv.slice(1), { cwd, timeout }); }
+  catch (error) {
+    if (!(error instanceof ExecError)) throw error;
+    return error.result;
+  }
+}
+
+async function verifyBuild(sprite, row, plan, { demo = false, criterionIds = null } = {}) {
   const repoPath = row.repo_path;
   const results = [];
-  const explicitInstall = plan.checks.some(args => args[0] === 'npm' && args[1] === 'install');
+  const checks = plan.checks.map(checkSpec);
+  const explicitInstall = checks.some(check => check.argv[0] === 'npm' && check.argv[1] === 'install');
   if (await f.remoteExists(sprite, `${repoPath}/package.json`) && !explicitInstall) {
     if (!(await f.remoteExists(sprite, `${repoPath}/.gitignore`))) {
       await sprite.filesystem('/').writeFile(`${repoPath}/.gitignore`,
@@ -307,20 +351,31 @@ async function verifyBuild(sprite, row, plan) {
       if (lock.exitCode !== 0) throw new f.FactoryError('Could not generate package lock');
       await commitSingleFile(sprite, repoPath, 'package-lock.json', 'Lock project dependencies');
     }
-    const install = await sprite.execFile('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'],
-      { cwd: repoPath, timeout: 600_000 });
-    results.push({ command: ['npm', 'ci'], exit_code: install.exitCode,
-      output: `${install.stdout}${install.stderr}`.slice(-3000) });
-    if (install.exitCode !== 0) return results;
+    const digest = await f.remoteRun(sprite, 'sha256sum', ['package.json', 'package-lock.json'], repoPath);
+    const marker = `/home/sprite/factory-cache/${row.project_id}-npm-install.txt`;
+    const cached = await f.remoteExists(sprite, `${repoPath}/node_modules`)
+      && await f.remoteExists(sprite, marker)
+      && (await sprite.filesystem('/').readFile(marker, 'utf8')).trim() === digest;
+    if (!cached) {
+      const started = Date.now();
+      const install = await checkResult(sprite,
+        ['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund'], repoPath, 300_000);
+      results.push({ id: 'dependencies', kind: 'setup', command: ['npm', 'ci'],
+        exit_code: install.exitCode, duration_ms: Date.now() - started,
+        output: `${install.stdout}${install.stderr}`.slice(-3000) });
+      if (install.exitCode !== 0) return results;
+      await f.remoteRun(sprite, 'mkdir', ['-p', '/home/sprite/factory-cache']);
+      await sprite.filesystem('/').writeFile(marker, `${digest}\n`);
+    } else results.push({ id: 'dependencies', kind: 'setup', command: ['npm', 'ci'],
+      exit_code: 0, cached: true, duration_ms: 0 });
   }
-  for (const args of plan.checks) {
-    let output;
-    try { output = await sprite.execFile(args[0], args.slice(1), { cwd: repoPath, timeout: 600_000 }); }
-    catch (error) {
-      if (!(error instanceof ExecError)) throw error;
-      output = error.result;
-    }
-    results.push({ command: args, exit_code: output.exitCode,
+  const selected = demo && criterionIds ? selectDemoChecks(plan, criterionIds) : checks;
+  for (const check of selected) {
+    const started = Date.now();
+    const output = await checkResult(sprite, check.argv, repoPath,
+      demo ? demoCheckTimeoutMs : 600_000);
+    results.push({ id: check.id, kind: check.kind, command: check.argv,
+      exit_code: output.exitCode, duration_ms: Date.now() - started,
       output: `${output.stdout}${output.stderr}`.slice(-4000) });
   }
   return results;
