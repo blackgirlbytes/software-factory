@@ -81,6 +81,36 @@ The factory should discover these needs from the request, reference repository, 
 6. Add artifact preview or delivery and a tutorial based on the completed run.
 7. Run the Girl Dinner rebuild as an end-to-end validation, then test a materially different request to prove the workflow is general.
 
+## Autonomous execution milestone
+
+The local CLI becomes a thin submit/status client. A dedicated orchestrator Sprite
+runs the controller as a supervised service with a durable SQLite queue. It owns
+the Sprites API token and GitHub repository-creation credential; project Sprites
+receive only their own repository deploy keys and Codex authentication. A request
+continues after the submitter disconnects. On service restart, unfinished jobs
+are reconciled against the controller database, Git commits, and Entire sessions
+before dispatching more work. Active long jobs use renewable Sprite tasks to
+prevent idle sleep. One job per project may run at a time.
+
+Every blocking acceptance criterion in a generated plan must cite an exact part
+of the user's request or supplied reference. An independent scope review checks
+that the cited source supports the criterion. Extra product ideas belong in a
+nonblocking follow-up section; they cannot become required tests or block
+delivery. The reviewer evaluates the approved contract, implementation, and
+executed evidence rather than treating every planner suggestion as a mandate.
+
+The controller classifies failures as repairable, transient, or externally
+blocked. It retries bounded transient failures, sends actionable defects back
+to Codex in the project Sprite, and pauses on missing credentials or exhausted
+API quota without burning repeated calls. Status exposes the exact stage,
+worker session, committed artifact, verification result, and next action.
+
+Autonomy is proven with two unrelated requests and a restart during an active
+run. A completed job must include a clean pushed repository, Entire-linked
+implementation history, passing required checks, review approval, tutorial,
+and the promised artifact or preview. An external blocker is reported as such,
+never as a completed build.
+
 ## References
 
 - [Fly.io Sprites overview](https://docs.fly.io/sprites/)
