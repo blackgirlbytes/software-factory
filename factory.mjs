@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { ExecError, SpritesClient } from '@fly/sprites';
+import { routeCodexTask } from './model-policy.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const statePath = join(root, '.factory', 'state.sqlite3');
@@ -51,6 +52,13 @@ function database() {
     project_id TEXT NOT NULL,
     agent TEXT NOT NULL,
     status TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`);
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_invocations (
+    invocation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL, project_id TEXT NOT NULL, run_id TEXT,
+    role TEXT NOT NULL, model TEXT NOT NULL, reasoning_effort TEXT NOT NULL,
+    reason TEXT NOT NULL, file TEXT, commit_sha TEXT, checkpoint_id TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`);
   const sessionColumns = new Set(db.prepare('PRAGMA table_info(agent_sessions)').all().map(row => row.name));
@@ -346,26 +354,43 @@ async function ensureCodexRuntime(sprite) {
   }
 }
 
-export function codexFileArgs(repoPath, prompt, { network = false, resumeSessionId = null } = {}) {
+function modelArgs(route) {
+  return ['--model', route.model, '-c', `model_reasoning_effort="${route.reasoningEffort}"`];
+}
+
+function recordModelUse(db, { sessionId, projectId, runId = null, route,
+  file = null, commitSha = null, checkpointId = null }) {
+  db.prepare(`INSERT INTO agent_invocations
+    (session_id, project_id, run_id, role, model, reasoning_effort, reason,
+      file, commit_sha, checkpoint_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    sessionId, projectId, runId, route.role, route.model, route.reasoningEffort,
+    route.reason, file, commitSha, checkpointId);
+}
+
+export function codexFileArgs(repoPath, prompt, { network = false, resumeSessionId = null,
+  role = 'build', complexity = 'standard' } = {}) {
   if (resumeSessionId && !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/.test(resumeSessionId)) {
     throw new FactoryError('Invalid Codex session ID for resume');
   }
+  const selection = modelArgs(routeCodexTask(role, { complexity }));
   const networkConfig = network ? ['-c', 'sandbox_workspace_write.network_access=true'] : [];
   return resumeSessionId
     ? ['node', codexScript, 'exec', 'resume', '-c', 'sandbox_mode="workspace-write"',
-      ...networkConfig, '--dangerously-bypass-hook-trust', '--json', resumeSessionId, prompt]
-    : ['node', codexScript, 'exec', '--sandbox', 'workspace-write', ...networkConfig,
+      ...selection, ...networkConfig, '--dangerously-bypass-hook-trust', '--json', resumeSessionId, prompt]
+    : ['node', codexScript, 'exec', '--sandbox', 'workspace-write', ...selection, ...networkConfig,
       '--dangerously-bypass-hook-trust', '--json', '-C', repoPath, prompt];
 }
 
 async function codexSmoke(db, sprite, projectId, repoPath) {
   await ensureCodexRuntime(sprite);
   await verifyCodexHooks(sprite, repoPath);
+  const route = routeCodexTask('smoke');
   // Sprites inherit ambient capabilities that Bubblewrap rejects. Drop them
   // before launching Codex so its own sandbox can protect the workspace.
   const result = await streamedCommand(sprite, 'setpriv', [
     '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all',
-    'node', codexScript, 'exec', '--sandbox', 'read-only', '--dangerously-bypass-hook-trust',
+    'node', codexScript, 'exec', '--sandbox', 'read-only', ...modelArgs(route),
+    '--dangerously-bypass-hook-trust',
     '--json', '-C', repoPath,
     'Run pwd using a shell command and report its exact output. Do not edit files.'], { cwd: repoPath });
   const events = String(result.stdout).split(/\r?\n/).filter(Boolean).flatMap(line => {
@@ -391,13 +416,15 @@ async function codexSmoke(db, sprite, projectId, repoPath) {
   if (!captured) throw new FactoryError('Entire did not capture the Codex session');
   db.prepare(`INSERT OR REPLACE INTO agent_sessions (session_id, project_id, agent, status)
     VALUES (?, ?, 'Codex', 'completed')`).run(sessionId, projectId);
+  recordModelUse(db, { sessionId, projectId, route });
   return { project_id: projectId, codex_version: codexVersionExpected,
-    session_id: sessionId, shell_command_verified: true, entire_session_captured: true };
+    session_id: sessionId, model: route.model, reasoning_effort: route.reasoningEffort,
+    shell_command_verified: true, entire_session_captured: true };
 }
 
 async function codexFile(db, sprite, row, relativePath, instruction,
   { network = false, timeout = 600_000, branch = 'main', runId = null,
-    resumeSessionId = null } = {}) {
+    resumeSessionId = null, role = 'build', complexity = 'standard' } = {}) {
   const segments = relativePath?.split('/') ?? [];
   if (!relativePath || !/^[A-Za-z0-9._/-]+$/.test(relativePath)
     || segments.some(segment => !segment || segment === '.' || segment === '..')
@@ -418,11 +445,12 @@ async function codexFile(db, sprite, row, relativePath, instruction,
   }
   await ensureCodexRuntime(sprite);
   await verifyCodexHooks(sprite, repoPath);
+  const route = routeCodexTask(role, { complexity });
   const prompt = `Read AGENTS.md. Change only ${relativePath}. ${instruction.trim()}\n` +
     'After changing that one file, stop. The factory controller will immediately commit and push it because your sandbox protects .git. Do not edit another file or attempt Git metadata changes.';
   const result = await streamedCommand(sprite, 'setpriv', [
     '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all',
-    ...codexFileArgs(repoPath, prompt, { network, resumeSessionId }),
+    ...codexFileArgs(repoPath, prompt, { network, resumeSessionId, role, complexity }),
   ], { cwd: repoPath, timeout });
   const events = String(result.stdout).split(/\r?\n/).filter(Boolean).flatMap(line => {
     try { return [JSON.parse(line)]; } catch { return []; }
@@ -456,11 +484,15 @@ async function codexFile(db, sprite, row, relativePath, instruction,
     (session_id, project_id, agent, status, commit_sha, checkpoint_id, run_id)
     VALUES (?, ?, 'Codex', 'completed', ?, ?, ?)`).run(sessionId, row.project_id,
       commitSha, checkpointId, runId);
+  recordModelUse(db, { sessionId, projectId: row.project_id, runId, route,
+    file: relativePath, commitSha, checkpointId });
   return { project_id: row.project_id, file: relativePath, session_id: sessionId,
-    commit_sha: commitSha, checkpoint_id: checkpointId, pushed: true };
+    commit_sha: commitSha, checkpoint_id: checkpointId, pushed: true,
+    model: route.model, reasoning_effort: route.reasoningEffort };
 }
 
-async function codexRead(db, sprite, row, prompt, { timeout = 600_000, runId = null } = {}) {
+async function codexRead(db, sprite, row, prompt,
+  { timeout = 600_000, runId = null, role = 'review' } = {}) {
   if (!row.repo_path) throw new FactoryError('Bootstrap this project before running Codex');
   const repoPath = row.repo_path;
   if (await remoteRun(sprite, 'git', ['status', '--porcelain=v1', '--untracked-files=all'], repoPath)) {
@@ -468,9 +500,10 @@ async function codexRead(db, sprite, row, prompt, { timeout = 600_000, runId = n
   }
   await ensureCodexRuntime(sprite);
   await verifyCodexHooks(sprite, repoPath);
+  const route = routeCodexTask(role);
   const result = await streamedCommand(sprite, 'setpriv', [
     '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all',
-    'node', codexScript, 'exec', '--sandbox', 'read-only',
+    'node', codexScript, 'exec', '--sandbox', 'read-only', ...modelArgs(route),
     '--dangerously-bypass-hook-trust', '--json', '-C', repoPath, prompt,
   ], { cwd: repoPath, timeout });
   const events = String(result.stdout).split(/\r?\n/).filter(Boolean).flatMap(line => {
@@ -498,7 +531,9 @@ async function codexRead(db, sprite, row, prompt, { timeout = 600_000, runId = n
   }
   db.prepare(`INSERT OR REPLACE INTO agent_sessions (session_id, project_id, agent, status, run_id)
     VALUES (?, ?, 'Codex', 'completed', ?)`).run(sessionId, row.project_id, runId);
-  return { session_id: sessionId, answer };
+  recordModelUse(db, { sessionId, projectId: row.project_id, runId, route });
+  return { session_id: sessionId, answer, model: route.model,
+    reasoning_effort: route.reasoningEffort };
 }
 
 async function trustCodexProject(sprite, repoPath) {
