@@ -181,7 +181,8 @@ export function validatePlan(plan, request, referenceText, referenceUse = 'requi
   for (const task of plan.tasks) {
     if (!/^[a-z0-9_-]{1,32}$/.test(task.id ?? '') || ids.has(task.id)
       || !safeFile(task.file) || !task.instruction?.trim()
-      || !Array.isArray(task.depends_on)) {
+      || !Array.isArray(task.depends_on)
+      || (task.complexity != null && !['simple', 'standard', 'complex'].includes(task.complexity))) {
       throw new f.FactoryError('PLAN.md has an invalid task ID, file, instruction, or dependency list');
     }
     ids.add(task.id);
@@ -293,7 +294,8 @@ async function buildSequential(db, sprite, row, run, task) {
     ? '' : 'Before editing, use the latest relevant Entire checkpoint in this run if it helps you understand prior work. ';
   const result = await f.codexFile(db, sprite, row, task.file,
     forRun(run, `${history}Read ${run.brief_json ? 'BRIEF.md and ' : ''}PLAN.md. ${task.instruction}`),
-    { network: true, runId: run.run_id, resumeSessionId: run.mode === 'demo' ? run.builder_session : null });
+    { network: true, runId: run.run_id, resumeSessionId: run.mode === 'demo' ? run.builder_session : null,
+      role: 'build', complexity: task.complexity ?? 'standard' });
   if (run.mode === 'demo') {
     run.builder_session = result.session_id;
     setStage(db, run.run_id, 'build', { builder_session: result.session_id });
@@ -320,7 +322,8 @@ async function buildParallel(db, sprite, row, run, tasks) {
   const results = await Promise.allSettled(prepared.map(async ({ task, branch, path }) => {
     const result = await f.codexFile(db, sprite, { ...row, repo_path: path }, task.file,
       forRun(run, `Read ${run.brief_json ? 'BRIEF.md and ' : ''}PLAN.md. ${task.instruction}`),
-      { network: true, branch, runId: run.run_id });
+      { network: true, branch, runId: run.run_id,
+        role: 'build', complexity: task.complexity ?? 'standard' });
     db.prepare(`UPDATE factory_tasks SET status = 'built', commit_sha = ?, session_id = ?, checkpoint_id = ?
       WHERE run_id = ? AND task_id = ?`).run(result.commit_sha, result.session_id,
       result.checkpoint_id, run.run_id, task.id);
@@ -464,7 +467,7 @@ async function reconcileLegacyScope(db, sprite, row, run) {
         'Only directly requested behavior may block delivery. The reference is context, not a mandate ' +
         'to reproduce every feature. Move inferred ideas to optional_ideas and remove requirements ' +
         'and test gates for optional behavior. Record the amendment in prose. Edit only PLAN.md.',
-        { network: true });
+        { network: true, role: attempt === 2 ? 'replan' : 'plan_repair', runId: run.run_id });
       try {
         candidate = validatePlan(extractJson(await sprite.filesystem('/').readFile(
           `${row.repo_path}/PLAN.md`, 'utf8'), 'factory-tasks'), run.request, referenceText);
@@ -481,7 +484,8 @@ async function reconcileLegacyScope(db, sprite, row, run) {
       `Independently audit amended PLAN.md against this original request: ${run.request}. ` +
       'The reference is context and does not make every feature mandatory. Reject blocking criteria ' +
       'or checks for inferred behavior. Do not edit files. Return only fenced json: ' +
-      '{"approved":boolean,"unsupported_ids":string[],"reason":string}.');
+      '{"approved":boolean,"unsupported_ids":string[],"reason":string}.',
+      { role: 'scope_audit', runId: run.run_id });
     const verdict = extractJson(audit.answer);
     if (verdict.approved === true && Array.isArray(verdict.unsupported_ids)
       && verdict.unsupported_ids.length === 0) {
@@ -502,6 +506,8 @@ export function workflowStatus(db, projectId) {
   const run = db.prepare('SELECT * FROM factory_runs WHERE project_id = ? ORDER BY created_at DESC LIMIT 1')
     .get(projectId);
   if (!run) return { project_id: projectId, run: null };
+  const modelHistoryExists = db.prepare(`SELECT 1 FROM sqlite_master
+    WHERE type = 'table' AND name = 'agent_invocations'`).get();
   return { run_id: run.run_id, project_id: projectId, stage: run.stage, status: run.status,
     brief: run.brief_json ? JSON.parse(run.brief_json) : null,
     builder_session: run.builder_session,
@@ -512,6 +518,9 @@ export function workflowStatus(db, projectId) {
       .all(run.run_id), decisions: db.prepare('SELECT sequence, mode, source, confidence FROM schedule_decisions WHERE run_id = ?')
       .all(run.run_id), timings: db.prepare(`SELECT stage, duration_ms, outcome, finished_at
         FROM factory_stage_timings WHERE run_id = ? ORDER BY sequence`).all(run.run_id),
+    model_choices: modelHistoryExists ? db.prepare(`SELECT session_id, role, model, reasoning_effort,
+      reason, file, commit_sha, checkpoint_id, created_at FROM agent_invocations
+      WHERE run_id = ? ORDER BY invocation_id`).all(run.run_id) : [],
     delivery: run.delivery_json ? JSON.parse(run.delivery_json) : null };
 }
 
@@ -576,7 +585,8 @@ export async function runWorkflow({ db, client, row, args }) {
         'If the reference contains an Entire checkpoint index, skim relevant entries for past intent; they add no requirements. ' +
         'Stop after at most three decision-critical sources. Write concise findings, source URLs or reference paths, approach, and relevant limits. ' +
         'Do not research optional features or production infrastructure.' +
-        (run.mode === 'demo' ? demoPolicy : ''), { network: true, runId: run.run_id });
+        (run.mode === 'demo' ? demoPolicy : ''),
+        { network: true, runId: run.run_id, role: 'research' });
       setStage(db, run.run_id, 'plan', { research_session: result.session_id });
     }
     run = activeRun(db, row.project_id);
@@ -604,7 +614,8 @@ export async function runWorkflow({ db, client, row, args }) {
                 : 'Only approved core flow may block demo delivery; the reference provides context but adds no mandatory features. ')
               : 'Only directly requested or explicitly referenced behavior may block delivery. ') +
             'Put inferred product ideas in optional_ideas. ' +
-            'Tasks must be 1–30 objects {id,file,instruction,depends_on:string[]}; each changes one file. ' +
+            'Tasks must be 1–30 objects {id,file,instruction,depends_on:string[],complexity:"simple"|"standard"|"complex"}; each changes one file. ' +
+            'Mark a task simple only when its edit is mechanical and fully specified; mark significant integration or debugging complex; otherwise use standard. ' +
             (run.mode === 'demo'
               ? 'Checks must be 1–2 objects {id,kind:"smoke"|"build",argv:string[],criterion_ids:string[]}. ' +
                 'Include one smoke command that exercises the approved core flow and names the criterion IDs it covers. ' +
@@ -614,7 +625,7 @@ export async function runWorkflow({ db, client, row, args }) {
             'Delivery is {type:"repository"} ' +
             'or {type:"web",start:argv array,port:number}. Use dependencies and choose a stack from the request and research.' +
             (run.mode === 'demo' ? ' Use at most two mandatory verification commands focused on the demo flow.' + demoPolicy : ''),
-            { network: true, runId: run.run_id });
+            { network: true, runId: run.run_id, role: 'plan' });
           setStage(db, run.run_id, 'plan', { plan_session: result.session_id });
         }
         try {
@@ -627,7 +638,8 @@ export async function runWorkflow({ db, client, row, args }) {
             'For a reference citation, use a relative tracked source path from a ## heading inside the snapshot and quote that file exactly. ' +
             'Keep inferred product ideas optional and preserve the one-file task graph.' +
             (run.mode === 'demo' ? demoPolicy : ''),
-            { network: true, runId: run.run_id, resumeSessionId: run.mode === 'demo' ? result.session_id : null });
+            { network: true, runId: run.run_id, resumeSessionId: run.mode === 'demo' ? result.session_id : null,
+              role: attempt === 1 ? 'replan' : 'plan_repair' });
           setStage(db, run.run_id, 'plan', { plan_session: result.session_id });
           continue;
         }
@@ -640,7 +652,8 @@ export async function runWorkflow({ db, client, row, args }) {
             : 'Reject any blocking criterion or required check that adds behavior not directly stated or explicitly supported by the reference. ') +
           'A general phrase such as mobile-friendly does not imply offline vote replay. ' +
           'Do not edit files. Return only fenced json: {"approved":boolean,"unsupported_ids":string[],"reason":string}.' +
-          (run.mode === 'demo' ? demoPolicy : ''), { runId: run.run_id });
+          (run.mode === 'demo' ? demoPolicy : ''),
+          { runId: run.run_id, role: 'scope_audit' });
         const verdict = extractJson(audit.answer);
         if (verdict.approved === true && Array.isArray(verdict.unsupported_ids)
           && verdict.unsupported_ids.length === 0) break;
@@ -649,7 +662,8 @@ export async function runWorkflow({ db, client, row, args }) {
           `Remove or mark optional unsupported delivery requirements and checks: ${JSON.stringify(verdict)}. ` +
           'Preserve directly sourced requirements and the one-file task graph.' +
           (run.mode === 'demo' ? demoPolicy : ''),
-          { network: true, runId: run.run_id, resumeSessionId: run.mode === 'demo' ? result.session_id : null });
+          { network: true, runId: run.run_id, resumeSessionId: run.mode === 'demo' ? result.session_id : null,
+            role: attempt === 1 ? 'replan' : 'plan_repair' });
         setStage(db, run.run_id, 'plan', { plan_session: result.session_id });
       }
       for (const task of plan.tasks) {
@@ -711,7 +725,7 @@ export async function runWorkflow({ db, client, row, args }) {
           'the product. Each finding must tie to the approved core flow or a failed mandatory check. ' +
           (run.mode === 'demo' ? 'Return at most two high-impact findings. ' : '') +
           'Do not edit files.' + (run.mode === 'demo' ? demoPolicy : ''),
-          { runId: run.run_id });
+          { runId: run.run_id, role: 'review' });
         review = extractJson(result.answer);
         review.session_id = result.session_id;
         if (review.approved && (!Array.isArray(JSON.parse(run.verification_json))
@@ -755,7 +769,7 @@ export async function runWorkflow({ db, client, row, args }) {
           }
           const fix = await f.codexFile(db, sprite, row, finding.file,
             forRun(run, `Read ${run.brief_json ? 'BRIEF.md and ' : ''}PLAN.md. ${finding.instruction}`),
-            { network: true, runId: run.run_id,
+            { network: true, runId: run.run_id, role: 'review_fix',
               resumeSessionId: run.mode === 'demo' ? run.builder_session : null });
           if (run.mode === 'demo') {
             run.builder_session = fix.session_id;
@@ -785,7 +799,7 @@ export async function runWorkflow({ db, client, row, args }) {
         'and relevant Entire checkpoints for this run. Explain how to run it, how the main flow works, key choices and limitations, ' +
         'and what a developer should change next. Ground claims in the actual verified implementation.' +
         (run.mode === 'demo' ? ' Clearly label demo data and limitations.' : ''),
-        { runId: run.run_id });
+        { runId: run.run_id, role: 'tutorial' });
       setStage(db, run.run_id, 'deliver');
     }
     run = activeRun(db, row.project_id);
