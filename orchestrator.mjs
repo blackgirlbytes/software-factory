@@ -116,9 +116,16 @@ function classifyFailure(output, attempt) {
 }
 
 async function workLoop() {
+  let queueRelease = null;
   while (!stopping) {
     const job = claimNext(db);
     if (!job) {
+      const queued = db.prepare("SELECT 1 FROM autonomy_jobs WHERE status = 'queued' LIMIT 1").get();
+      if (queued && !queueRelease) queueRelease = await keepAwake('queued-work');
+      if (!queued && queueRelease) {
+        await queueRelease();
+        queueRelease = null;
+      }
       await new Promise(resolve => setTimeout(resolve, 500));
       continue;
     }
@@ -139,6 +146,7 @@ async function workLoop() {
       activeJobId = null;
     }
   }
+  if (queueRelease) await queueRelease();
 }
 
 const server = createServer(async (request, response) => {
