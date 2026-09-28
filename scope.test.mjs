@@ -13,6 +13,9 @@ const criterion = {
 test('a directly sourced requirement is blocking', () => {
   const plan = { acceptance_criteria: [criterion], optional_ideas: ['Replay offline votes later.'] };
   assert.equal(validateScope(plan, request), plan);
+  const explained = { acceptance_criteria: [criterion], optional_ideas: [
+    { idea: 'Replay offline votes later.', reason: 'The request does not ask for offline use.' }] };
+  assert.equal(validateScope(explained, request), explained);
   assert.equal(validateScope({ acceptance_criteria: [{ ...criterion, id: 'A1' }] }, request)
     .acceptance_criteria[0].id, 'A1');
 });
