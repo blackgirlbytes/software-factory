@@ -108,7 +108,7 @@ function extractJson(text, fence = 'json') {
   catch { throw new f.FactoryError(`Invalid JSON in ${fence} block`); }
 }
 
-function validatePlan(plan, request, referenceText, mode = 'legacy') {
+function validatePlan(plan, request, referenceText) {
   if (Array.isArray(plan?.tasks)) {
     // The controller owns these final stages even when a planner lists them.
     plan.tasks = plan.tasks.filter(task => !['REVIEW.md', 'TUTORIAL.md'].includes(task.file));
@@ -144,9 +144,6 @@ function validatePlan(plan, request, referenceText, mode = 'legacy') {
   if (!Array.isArray(plan.checks) || plan.checks.some(check => !Array.isArray(check)
     || !check.length || check.some(arg => typeof arg !== 'string' || !arg))) {
     throw new f.FactoryError('PLAN.md checks must be command argument arrays');
-  }
-  if (mode === 'demo' && plan.checks.length > 3) {
-    throw new f.FactoryError('Demo plans may require at most three focused verification commands');
   }
   if (!plan.delivery || !['web', 'repository'].includes(plan.delivery.type)) {
     throw new f.FactoryError('PLAN.md needs a web or repository delivery type');
@@ -434,16 +431,19 @@ export async function runWorkflow({ db, client, row, args }) {
             'Each acceptance criterion must be {id,text,source:{kind:"request",quote:exactUserWords} ' +
             'or {kind:"reference",path:relativeTrackedSourceFile,quote:exactReferenceWords},verification}. ' +
             'A reference path must match a ## file heading inside the snapshot, never the snapshot .md path. ' +
-            'Only directly requested or explicitly referenced behavior may block delivery. Put inferred product ideas in optional_ideas. ' +
+            (run.mode === 'demo'
+              ? 'Only behavior requested by the user may block demo delivery; the reference provides context but adds no mandatory features. '
+              : 'Only directly requested or explicitly referenced behavior may block delivery. ') +
+            'Put inferred product ideas in optional_ideas. ' +
             'Tasks must be 1–30 objects {id,file,instruction,depends_on:string[]}; each changes one file. ' +
             'Checks are command argv arrays for required behavior only. Delivery is {type:"repository"} ' +
             'or {type:"web",start:argv array,port:number}. Use dependencies and choose a stack from the request and research.' +
-            (run.mode === 'demo' ? ' For this demo, reference details are optional unless the request names them. Use at most three mandatory verification commands.' + demoPolicy : ''),
+            (run.mode === 'demo' ? ' Keep the mandatory verification commands small and focused on the demo flow.' + demoPolicy : ''),
             { network: true });
         }
         try {
           plan = validatePlan(extractJson(await sprite.filesystem('/').readFile(`${row.repo_path}/PLAN.md`, 'utf8'), 'factory-tasks'),
-            run.request, referenceText, run.mode);
+            run.request, referenceText);
         } catch (error) {
           if (attempt === 2) throw error;
           result = await f.codexFile(db, sprite, row, 'PLAN.md',
@@ -455,7 +455,9 @@ export async function runWorkflow({ db, client, row, args }) {
         }
         const audit = await f.codexRead(db, sprite, row,
           `Audit PLAN.md scope against the user's request: ${run.request}. Reference snapshot: ${reference}. ` +
-          'Reject any blocking criterion or required check that adds behavior not directly stated or explicitly supported by the reference. ' +
+          (run.mode === 'demo'
+            ? 'Reject blocking criteria and checks for behavior not requested by the user, even if the reference contains it. '
+            : 'Reject any blocking criterion or required check that adds behavior not directly stated or explicitly supported by the reference. ') +
           'A general phrase such as mobile-friendly does not imply offline vote replay. ' +
           'Do not edit files. Return only fenced json: {"approved":boolean,"unsupported_ids":string[],"reason":string}.' +
           (run.mode === 'demo' ? ' Reject mandatory features found only in the reference or production requirements not requested by the user.' + demoPolicy : ''));
