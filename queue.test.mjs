@@ -123,6 +123,9 @@ test('demo verification permits only focused, sourced checks', () => {
   assert.deepEqual(selectDemoChecks(plan, ['core']).map(check => check.id), ['flow']);
   assert.deepEqual(selectDemoChecks(plan, []).map(check => check.id), ['flow']);
   assert.deepEqual(selectDemoChecks(plan, ['unknown']).map(check => check.id), ['flow']);
+  const overlapping = demoPlan();
+  overlapping.checks[1].criterion_ids.push('core');
+  assert.deepEqual(selectDemoChecks(overlapping, ['core']).map(check => check.id), ['flow']);
   const broad = demoPlan();
   broad.checks[0].argv = ['npm', 'test'];
   assert.throws(() => validatePlan(broad, 'Add a task and show the task list', '', 'none', true),
@@ -131,7 +134,7 @@ test('demo verification permits only focused, sourced checks', () => {
   tooMany.checks.push({ id: 'extra', kind: 'smoke', argv: ['node', 'extra.mjs'],
     criterion_ids: ['core'] });
   assert.throws(() => validatePlan(tooMany, 'Add a task and show the task list', '', 'none', true),
-    /at most two/);
+    /one core-flow smoke check/);
 });
 
 test('dependency install is reused until the package manifest or lock changes', async () => {
