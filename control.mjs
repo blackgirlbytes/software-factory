@@ -103,10 +103,22 @@ async function deploy() {
 
 async function call(target, method, path, body) {
   const args = ['-sS', '-w', '\n%{http_code}', '-X', method];
-  if (body !== undefined) args.push('-H', 'Content-Type: application/json',
-    '--data-binary', JSON.stringify(body));
+  let payloadPath = null;
+  if (body !== undefined) {
+    const payload = JSON.stringify(body);
+    args.push('-H', 'Content-Type: application/json', '--data-binary');
+    if (payload.length > 16_000) {
+      payloadPath = `/home/sprite/factory-submit-${randomUUID()}.json`;
+      await target.filesystem('/').writeFile(payloadPath, payload, { mode: 0o600 });
+      args.push(`@${payloadPath}`);
+    } else args.push(payload);
+  }
   args.push(`http://127.0.0.1:8080${path}`);
-  const result = await target.execFile('curl', args, { timeout: 45_000 });
+  let result;
+  try { result = await target.execFile('curl', args, { timeout: 45_000 }); }
+  finally {
+    if (payloadPath) await target.execFile('rm', ['-f', '--', payloadPath]);
+  }
   if (result.exitCode !== 0) throw new Error('Could not reach the orchestrator service');
   const output = String(result.stdout);
   const split = output.lastIndexOf('\n');
