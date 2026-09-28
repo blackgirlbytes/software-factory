@@ -66,7 +66,7 @@ function setStage(db, runId, stage, extra = {}) {
   db.prepare(`UPDATE factory_runs SET ${fields.join(', ')} WHERE run_id = ?`).run(...values, runId);
 }
 
-function referenceSnapshot(localPath) {
+export function referenceSnapshot(localPath) {
   const directory = realpathSync(resolve(localPath));
   if (statSync(directory).isFile()) {
     const snapshot = readFileSync(directory, 'utf8');
