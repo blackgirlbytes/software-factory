@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.11.3",
+  "checkpoint_id": "01M3N2SE16417XMT5HW8R9CA2K",
+  "session_id": "01a0e9fa-c944-7d13-a93b-a4700918f07f",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-28T22:39:54.534351Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "workflow.mjs"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-sol",
+  "turn_id": "800626aba37f",
+  "initial_attribution": {
+    "calculated_at": "2026-09-28T22:39:54.532796Z",
+    "agent_lines": 31,
+    "agent_removed": 16,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 31,
+    "total_lines_changed": 47,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
