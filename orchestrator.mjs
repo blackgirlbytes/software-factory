@@ -133,6 +133,22 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && url.pathname === '/jobs') {
       return reply(response, 200, { jobs: listJobs(db) });
     }
+    if (request.method === 'POST' && url.pathname === '/adopt') {
+      const input = await body(request);
+      if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(input.projectId ?? '')) {
+        throw new QueueError('Invalid project ID');
+      }
+      const run = db.prepare(`SELECT request, reference_path, stage FROM factory_runs
+        WHERE project_id = ? AND status != 'complete' ORDER BY created_at DESC LIMIT 1`)
+        .get(input.projectId);
+      if (!run) throw new QueueError('No unfinished local run was transferred for this project');
+      if (['bootstrap', 'research', 'plan'].includes(run.stage) && run.reference_path) {
+        throw new QueueError('This run needs its local reference snapshot before remote adoption');
+      }
+      const job = enqueue(db, { projectId: input.projectId, request: run.request,
+        referencePath: run.reference_path, idempotencyKey: input.idempotencyKey });
+      return reply(response, 202, { job });
+    }
     if (request.method === 'POST' && url.pathname === '/jobs') {
       const input = await body(request);
       let referencePath = null;
