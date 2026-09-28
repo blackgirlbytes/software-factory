@@ -120,6 +120,7 @@ test('demo verification permits only focused, sourced checks', () => {
   const plan = demoPlan();
   assert.equal(validatePlan(plan, 'Add a task and show the task list', '', 'none', true), plan);
   assert.deepEqual(selectDemoChecks(plan, ['core']).map(check => check.id), ['flow']);
+  assert.deepEqual(selectDemoChecks(plan, []).map(check => check.id), ['flow']);
   assert.deepEqual(selectDemoChecks(plan, ['unknown']).map(check => check.id), ['flow']);
   const broad = demoPlan();
   broad.checks[0].argv = ['npm', 'test'];
