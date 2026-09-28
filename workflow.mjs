@@ -5,6 +5,7 @@ import { resolve, join, extname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ExecError } from '@fly/sprites';
 import { validateScope, ScopeError } from './scope.mjs';
+import { normalizeBrief, briefDocument } from './brief.mjs';
 let f;
 export function configureWorkflow(internals) { f = internals; }
 
@@ -41,19 +42,29 @@ function ensureTables(db) {
   if (!columns.has('mode')) {
     db.exec("ALTER TABLE factory_runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'legacy'");
   }
+  if (!columns.has('brief_json')) db.exec('ALTER TABLE factory_runs ADD COLUMN brief_json TEXT');
+  if (!columns.has('builder_session')) db.exec('ALTER TABLE factory_runs ADD COLUMN builder_session TEXT');
 }
 
 function parseArgs(args) {
   const options = {};
   for (let i = 0; i < args.length; i += 2) {
     const key = args[i];
-    if (!['--request', '--reference-path'].includes(key) || !args[i + 1] || options[key]) {
-      throw new f.FactoryError('Use run <project-id> --request <text> [--reference-path <local-repo>]');
+    if (!['--request', '--reference-path', '--brief-json'].includes(key) || !args[i + 1] || options[key]) {
+      throw new f.FactoryError('Use run <project-id> --request <text> [--reference-path <local-repo>] --brief-json <json>');
     }
     options[key] = args[i + 1];
   }
   if (!options['--request']?.trim()) throw new f.FactoryError('The run needs a request');
-  return { request: options['--request'].trim(), referencePath: options['--reference-path'] ?? null };
+  const request = options['--request'].trim();
+  let brief = null;
+  if (options['--brief-json']) {
+    let supplied;
+    try { supplied = JSON.parse(options['--brief-json']); }
+    catch { throw new f.FactoryError('The brief must be valid JSON'); }
+    brief = normalizeBrief(supplied, request, Boolean(options['--reference-path']));
+  }
+  return { request, referencePath: options['--reference-path'] ?? null, brief };
 }
 
 function activeRun(db, projectId) {
@@ -66,7 +77,7 @@ function setStage(db, runId, stage, extra = {}) {
   const values = [stage];
   for (const [key, value] of Object.entries(extra)) {
     if (!['status', 'plan_json', 'research_session', 'plan_session', 'review_json',
-      'verification_json', 'delivery_json', 'error'].includes(key)) throw new Error(`Invalid run field: ${key}`);
+      'verification_json', 'delivery_json', 'error', 'builder_session'].includes(key)) throw new Error(`Invalid run field: ${key}`);
     fields.push(`${key} = ?`);
     values.push(value);
   }
@@ -108,7 +119,7 @@ function extractJson(text, fence = 'json') {
   catch { throw new f.FactoryError(`Invalid JSON in ${fence} block`); }
 }
 
-function validatePlan(plan, request, referenceText) {
+function validatePlan(plan, request, referenceText, referenceUse = 'requirements') {
   if (Array.isArray(plan?.tasks)) {
     // The controller owns these final stages even when a planner lists them.
     plan.tasks = plan.tasks.filter(task => !['REVIEW.md', 'TUTORIAL.md'].includes(task.file));
@@ -120,6 +131,9 @@ function validatePlan(plan, request, referenceText) {
     throw new f.FactoryError('PLAN.md needs acceptance criteria');
   }
   validateScope(plan, request, referenceText);
+  if (referenceUse !== 'requirements' && plan.acceptance_criteria.some(item => item.source?.kind === 'reference')) {
+    throw new f.FactoryError('Reference material is context, not an approved source of demo requirements');
+  }
   const ids = new Set();
   for (const task of plan.tasks) {
     if (!/^[a-z0-9_-]{1,32}$/.test(task.id ?? '') || ids.has(task.id)
@@ -208,7 +222,15 @@ async function chooseSchedule(db, run, ready) {
 }
 
 async function buildSequential(db, sprite, row, run, task) {
-  const result = await f.codexFile(db, sprite, row, task.file, forRun(run, task.instruction), { network: true });
+  const history = run.builder_session
+    ? '' : 'Before editing, use the latest relevant Entire checkpoint in this run if it helps you understand prior work. ';
+  const result = await f.codexFile(db, sprite, row, task.file,
+    forRun(run, `${history}Read BRIEF.md and PLAN.md. ${task.instruction}`),
+    { network: true, runId: run.run_id, resumeSessionId: run.mode === 'demo' ? run.builder_session : null });
+  if (run.mode === 'demo') {
+    run.builder_session = result.session_id;
+    setStage(db, run.run_id, 'build', { builder_session: result.session_id });
+  }
   db.prepare(`UPDATE factory_tasks SET status = 'complete', commit_sha = ?, session_id = ?, checkpoint_id = ?
     WHERE run_id = ? AND task_id = ?`).run(result.commit_sha, result.session_id, result.checkpoint_id,
     run.run_id, task.id);
@@ -230,7 +252,8 @@ async function buildParallel(db, sprite, row, run, tasks) {
   }
   const results = await Promise.allSettled(prepared.map(async ({ task, branch, path }) => {
     const result = await f.codexFile(db, sprite, { ...row, repo_path: path }, task.file,
-      forRun(run, task.instruction), { network: true, branch });
+      forRun(run, `Read BRIEF.md and PLAN.md. ${task.instruction}`),
+      { network: true, branch, runId: run.run_id });
     db.prepare(`UPDATE factory_tasks SET status = 'built', commit_sha = ?, session_id = ?, checkpoint_id = ?
       WHERE run_id = ? AND task_id = ?`).run(result.commit_sha, result.session_id,
       result.checkpoint_id, run.run_id, task.id);
@@ -373,6 +396,8 @@ export function workflowStatus(db, projectId) {
     .get(projectId);
   if (!run) return { project_id: projectId, run: null };
   return { run_id: run.run_id, project_id: projectId, stage: run.stage, status: run.status,
+    brief: run.brief_json ? JSON.parse(run.brief_json) : null,
+    builder_session: run.builder_session,
     error: run.error, tasks: db.prepare('SELECT task_id, file, status, commit_sha, checkpoint_id FROM factory_tasks WHERE run_id = ?')
       .all(run.run_id), decisions: db.prepare('SELECT sequence, mode, source, confidence FROM schedule_decisions WHERE run_id = ?')
       .all(run.run_id), delivery: run.delivery_json ? JSON.parse(run.delivery_json) : null };
@@ -385,10 +410,15 @@ export async function runWorkflow({ db, client, row, args }) {
   if (run && (run.request !== input.request || run.reference_path !== input.referencePath)) {
     throw new f.FactoryError('An unfinished run has different input; resume it with the original request');
   }
+  if (run && run.brief_json && JSON.stringify(input.brief) !== run.brief_json) {
+    throw new f.FactoryError('An unfinished run has a different approved brief; resume with the original brief');
+  }
   if (!run) {
+    if (!input.brief) throw new f.FactoryError('A new demo run needs a short approved brief');
     const id = randomUUID();
-    db.prepare(`INSERT INTO factory_runs (run_id, project_id, request, reference_path, stage, status, mode)
-      VALUES (?, ?, ?, ?, 'bootstrap', 'running', 'demo')`).run(id, row.project_id, input.request, input.referencePath);
+    db.prepare(`INSERT INTO factory_runs (run_id, project_id, request, reference_path, stage, status, mode, brief_json)
+      VALUES (?, ?, ?, ?, 'bootstrap', 'running', 'demo', ?)`)
+      .run(id, row.project_id, input.request, input.referencePath, JSON.stringify(input.brief));
     run = activeRun(db, row.project_id);
   }
   setStage(db, run.run_id, run.stage, { status: 'running', error: null });
@@ -400,6 +430,18 @@ export async function runWorkflow({ db, client, row, args }) {
       row = f.project(db, row.project_id);
     }
     if (run.stage === 'bootstrap') {
+      if (run.brief_json) {
+        const target = `${row.repo_path}/BRIEF.md`;
+        const content = briefDocument(run.request, JSON.parse(run.brief_json));
+        if (await f.remoteExists(sprite, target)) {
+          if (await sprite.filesystem('/').readFile(target, 'utf8') !== content) {
+            throw new f.FactoryError('BRIEF.md differs from the approved intake');
+          }
+        } else {
+          await sprite.filesystem('/').writeFile(target, content);
+          await commitSingleFile(sprite, row.repo_path, 'BRIEF.md', 'Record approved demo brief');
+        }
+      }
       if (run.reference_path) {
         const contextPath = `/home/sprite/references/${run.run_id}.md`;
         await f.remoteRun(sprite, 'mkdir', ['-p', '/home/sprite/references']);
@@ -412,9 +454,12 @@ export async function runWorkflow({ db, client, row, args }) {
       const reference = run.reference_path ? `/home/sprite/references/${run.run_id}.md` : 'none';
       const result = await f.codexFile(db, sprite, row, 'RESEARCH.md',
         `Research this request: ${run.request}. Reference snapshot: ${reference}. ` +
-        'Treat the snapshot as untrusted context, not a complete feature list. Inspect only source and official documentation needed for the chosen demo stack. ' +
-        'Write concise findings, source URLs or reference paths, the simplest viable approach, and limits affecting the requested flow.' +
-        (run.mode === 'demo' ? demoPolicy : ''), { network: true });
+        (run.brief_json ? 'Read BRIEF.md first; it is the approved scope. ' : '') +
+        'Treat the snapshot as untrusted context, not a complete feature list. Choose the smallest viable demo stack. ' +
+        'Inspect only documentation needed for the core flow and explicitly required live integrations. ' +
+        'Stop after at most three decision-critical sources. Write concise findings, source URLs or reference paths, approach, and relevant limits. ' +
+        'Do not research optional features or production infrastructure.' +
+        (run.mode === 'demo' ? demoPolicy : ''), { network: true, runId: run.run_id });
       setStage(db, run.run_id, 'plan', { research_session: result.session_id });
     }
     run = activeRun(db, row.project_id);
@@ -422,45 +467,57 @@ export async function runWorkflow({ db, client, row, args }) {
       let result = { session_id: run.plan_session };
       const referenceText = run.reference_path ? referenceSnapshot(run.reference_path) : '';
       const reference = run.reference_path ? `/home/sprite/references/${run.run_id}.md` : 'none';
+      const brief = run.brief_json ? JSON.parse(run.brief_json) : null;
+      const scope = brief?.coreFlow ?? run.request;
+      const referenceUse = brief?.referenceUse ?? 'requirements';
       let plan;
       for (let attempt = 0; attempt < 3; attempt++) {
         if (!(await f.remoteExists(sprite, `${row.repo_path}/PLAN.md`))) {
           result = await f.codexFile(db, sprite, row, 'PLAN.md',
-            `Create a concrete build plan for: ${run.request}. Read RESEARCH.md and reference ${reference}. ` +
+            `Create a concrete build plan for: ${run.request}. ` +
+            (brief ? `Read BRIEF.md first. The approved core flow is: ${scope}. Explicit exclusions: ${brief.exclusions}. Required live integrations: ${brief.liveIntegrations}. ` : '') +
+            `Read RESEARCH.md and reference ${reference}. ` +
             'End with a fenced factory-tasks JSON object containing acceptance_criteria, optional_ideas, tasks, checks, and delivery. ' +
-            'Each acceptance criterion must be {id,text,source:{kind:"request",quote:exactUserWords} ' +
-            'or {kind:"reference",path:relativeTrackedSourceFile,quote:exactReferenceWords},verification}. ' +
+            'Each acceptance criterion must be {id,text,source:{kind:"request",quote:exactWordsFromApprovedCoreFlow} ' +
+            (referenceUse === 'requirements' ? 'or {kind:"reference",path:relativeTrackedSourceFile,quote:exactReferenceWords}' : '') + ',verification}. ' +
             'A reference path must match a ## file heading inside the snapshot, never the snapshot .md path. ' +
             (run.mode === 'demo'
-              ? 'Only behavior requested by the user may block demo delivery; the reference provides context but adds no mandatory features. '
+              ? (referenceUse === 'requirements'
+                ? 'Only approved core flow and explicitly required reference behavior may block demo delivery. '
+                : 'Only approved core flow may block demo delivery; the reference provides context but adds no mandatory features. ')
               : 'Only directly requested or explicitly referenced behavior may block delivery. ') +
             'Put inferred product ideas in optional_ideas. ' +
             'Tasks must be 1–30 objects {id,file,instruction,depends_on:string[]}; each changes one file. ' +
             'Checks are command argv arrays for required behavior only. Delivery is {type:"repository"} ' +
             'or {type:"web",start:argv array,port:number}. Use dependencies and choose a stack from the request and research.' +
             (run.mode === 'demo' ? ' Keep the mandatory verification commands small and focused on the demo flow.' + demoPolicy : ''),
-            { network: true });
+            { network: true, runId: run.run_id });
+          setStage(db, run.run_id, 'plan', { plan_session: result.session_id });
         }
         try {
           plan = validatePlan(extractJson(await sprite.filesystem('/').readFile(`${row.repo_path}/PLAN.md`, 'utf8'), 'factory-tasks'),
-            run.request, referenceText);
+            scope, referenceText, referenceUse);
         } catch (error) {
           if (attempt === 2) throw error;
           result = await f.codexFile(db, sprite, row, 'PLAN.md',
             `Repair the factory-tasks JSON schema and sourced acceptance criteria. Validation error: ${error.message}. ` +
             'For a reference citation, use a relative tracked source path from a ## heading inside the snapshot and quote that file exactly. ' +
             'Keep inferred product ideas optional and preserve the one-file task graph.' +
-            (run.mode === 'demo' ? demoPolicy : ''), { network: true });
+            (run.mode === 'demo' ? demoPolicy : ''),
+            { network: true, runId: run.run_id, resumeSessionId: run.mode === 'demo' ? result.session_id : null });
+          setStage(db, run.run_id, 'plan', { plan_session: result.session_id });
           continue;
         }
         const audit = await f.codexRead(db, sprite, row,
-          `Audit PLAN.md scope against the user's request: ${run.request}. Reference snapshot: ${reference}. ` +
+          `Audit PLAN.md against the approved core flow: ${scope}. ` +
+          (brief ? `Read BRIEF.md and reject its excluded features or unapproved live integrations. Reference use: ${referenceUse}. ` : '') +
+          `Reference snapshot: ${reference}. ` +
           (run.mode === 'demo'
-            ? 'Reject blocking criteria and checks for behavior not requested by the user, even if the reference contains it. '
+            ? 'Reject blocking criteria and checks outside the approved core flow; reference criteria are allowed only when the brief says requirements. '
             : 'Reject any blocking criterion or required check that adds behavior not directly stated or explicitly supported by the reference. ') +
           'A general phrase such as mobile-friendly does not imply offline vote replay. ' +
           'Do not edit files. Return only fenced json: {"approved":boolean,"unsupported_ids":string[],"reason":string}.' +
-          (run.mode === 'demo' ? ' Reject mandatory features found only in the reference or production requirements not requested by the user.' + demoPolicy : ''));
+          (run.mode === 'demo' ? demoPolicy : ''), { runId: run.run_id });
         const verdict = extractJson(audit.answer);
         if (verdict.approved === true && Array.isArray(verdict.unsupported_ids)
           && verdict.unsupported_ids.length === 0) break;
@@ -468,7 +525,9 @@ export async function runWorkflow({ db, client, row, args }) {
         result = await f.codexFile(db, sprite, row, 'PLAN.md',
           `Remove or mark optional unsupported delivery requirements and checks: ${JSON.stringify(verdict)}. ` +
           'Preserve directly sourced requirements and the one-file task graph.' +
-          (run.mode === 'demo' ? demoPolicy : ''), { network: true });
+          (run.mode === 'demo' ? demoPolicy : ''),
+          { network: true, runId: run.run_id, resumeSessionId: run.mode === 'demo' ? result.session_id : null });
+        setStage(db, run.run_id, 'plan', { plan_session: result.session_id });
       }
       for (const task of plan.tasks) {
         db.prepare(`INSERT OR IGNORE INTO factory_tasks (run_id, task_id, file, status)
@@ -504,11 +563,16 @@ export async function runWorkflow({ db, client, row, args }) {
       const plan = JSON.parse(run.plan_json);
       let review;
       for (let round = 0; round < 3; round++) {
-        const taskSessions = db.prepare(`SELECT session_id, commit_sha, checkpoint_id FROM agent_sessions
-          WHERE project_id = ? AND commit_sha IS NOT NULL ORDER BY created_at`).all(row.project_id);
+        const taskSessions = db.prepare(`SELECT session_id, commit_sha, checkpoint_id FROM factory_tasks
+          WHERE run_id = ? AND checkpoint_id IS NOT NULL ORDER BY rowid`).all(run.run_id);
+        const otherSessions = db.prepare(`SELECT session_id, commit_sha, checkpoint_id FROM agent_sessions
+          WHERE run_id = ? AND commit_sha IS NOT NULL ORDER BY created_at`).all(run.run_id);
+        const history = [...taskSessions, ...otherSessions].filter((entry, index, entries) =>
+          entries.findIndex(other => other.checkpoint_id === entry.checkpoint_id) === index);
         const result = await f.codexRead(db, sprite, row,
-          `Review this implementation against the original request: ${run.request}. Read PLAN.md, RESEARCH.md, ` +
-          `source files, and Entire history for these sessions/checkpoints: ${JSON.stringify(taskSessions)}. ` +
+          `Review this implementation against the approved demo brief: ${run.request}. Read BRIEF.md, PLAN.md, RESEARCH.md, ` +
+          `source files, and relevant Entire checkpoint history for this run: ${JSON.stringify(history)}. ` +
+          'Use Entire checkpoint explain for checkpoints that clarify implementation intent; do not replay unrelated project history. ' +
           `Verification results: ${run.verification_json}. Check every acceptance criterion and verify claims against code. ` +
           'Reply with only a fenced json object: {"approved": boolean, "summary": string, ' +
           '"findings": [{"file": repositoryRelativePath, "instruction": specificFix}]}. ' +
@@ -516,7 +580,8 @@ export async function runWorkflow({ db, client, row, args }) {
           'a diagnostic outside the approved contract must be skipped by default or moved to ' +
           'a separate opt-in command, even if it currently passes. If a required test covers ' +
           'optional behavior, return a finding to correct the test gate rather than expanding ' +
-          'the product. Do not edit files.' + (run.mode === 'demo' ? demoPolicy : ''));
+          'the product. Do not edit files.' + (run.mode === 'demo' ? demoPolicy : ''),
+          { runId: run.run_id });
         review = extractJson(result.answer);
         review.session_id = result.session_id;
         if (review.approved && (!Array.isArray(JSON.parse(run.verification_json))
@@ -531,7 +596,14 @@ export async function runWorkflow({ db, client, row, args }) {
           if (!safeFile(finding.file) || !finding.instruction?.trim()) {
             throw new f.FactoryError('Review returned an unsafe or incomplete fix');
           }
-          await f.codexFile(db, sprite, row, finding.file, forRun(run, finding.instruction), { network: true });
+          const fix = await f.codexFile(db, sprite, row, finding.file,
+            forRun(run, `Read BRIEF.md and PLAN.md. ${finding.instruction}`),
+            { network: true, runId: run.run_id,
+              resumeSessionId: run.mode === 'demo' ? run.builder_session : null });
+          if (run.mode === 'demo') {
+            run.builder_session = fix.session_id;
+            setStage(db, run.run_id, 'review', { builder_session: fix.session_id });
+          }
         }
         const checks = await verifyBuild(sprite, row, plan);
         setStage(db, run.run_id, 'review', { verification_json: JSON.stringify(checks) });
@@ -547,10 +619,11 @@ export async function runWorkflow({ db, client, row, args }) {
     run = activeRun(db, row.project_id);
     if (run.stage === 'tutorial') {
       await f.codexFile(db, sprite, row, 'TUTORIAL.md',
-        'Write a practical tutorial for this finished project. Read PLAN.md, RESEARCH.md, REVIEW.md, implementation files, ' +
-        'and Entire session history. Explain how to run it, how the main flow works, key choices and limitations, ' +
+        'Write a practical tutorial for this finished project. Read BRIEF.md, PLAN.md, RESEARCH.md, REVIEW.md, implementation files, ' +
+        'and relevant Entire checkpoints for this run. Explain how to run it, how the main flow works, key choices and limitations, ' +
         'and what a developer should change next. Ground claims in the actual verified implementation.' +
-        (run.mode === 'demo' ? ' Clearly label demo data and limitations.' : ''));
+        (run.mode === 'demo' ? ' Clearly label demo data and limitations.' : ''),
+        { runId: run.run_id });
       setStage(db, run.run_id, 'deliver');
     }
     run = activeRun(db, row.project_id);
