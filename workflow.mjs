@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { resolve, join, extname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ExecError } from '@fly/sprites';
+import { validateScope } from './scope.mjs';
 let f;
 export function configureWorkflow(internals) { f = internals; }
 
@@ -67,7 +68,14 @@ function setStage(db, runId, stage, extra = {}) {
 
 function referenceSnapshot(localPath) {
   const directory = realpathSync(resolve(localPath));
-  if (!statSync(directory).isDirectory()) throw new f.FactoryError('Reference path must be a directory');
+  if (statSync(directory).isFile()) {
+    const snapshot = readFileSync(directory, 'utf8');
+    if (snapshot.length > 500_000 || !snapshot.startsWith('# Reference source snapshot\n')) {
+      throw new f.FactoryError('Reference snapshot is invalid or too large');
+    }
+    return snapshot;
+  }
+  if (!statSync(directory).isDirectory()) throw new f.FactoryError('Reference path must be a directory or snapshot');
   const files = execFileSync('git', ['-C', directory, 'ls-files', '-z'], { encoding: 'utf8' })
     .split('\0').filter(Boolean);
   let size = 0;
@@ -93,7 +101,7 @@ function extractJson(text, fence = 'json') {
   catch { throw new f.FactoryError(`Invalid JSON in ${fence} block`); }
 }
 
-function validatePlan(plan) {
+function validatePlan(plan, request, referenceText) {
   if (Array.isArray(plan?.tasks)) {
     // The controller owns these final stages even when a planner lists them.
     plan.tasks = plan.tasks.filter(task => !['REVIEW.md', 'TUTORIAL.md'].includes(task.file));
@@ -104,6 +112,7 @@ function validatePlan(plan) {
   if (!Array.isArray(plan.acceptance_criteria) || !plan.acceptance_criteria.length) {
     throw new f.FactoryError('PLAN.md needs acceptance criteria');
   }
+  validateScope(plan, request, referenceText);
   const ids = new Set();
   for (const task of plan.tasks) {
     if (!/^[a-z0-9_-]{1,32}$/.test(task.id ?? '') || ids.has(task.id)
@@ -334,18 +343,45 @@ export async function runWorkflow({ db, client, row, args }) {
     run = activeRun(db, row.project_id);
     if (run.stage === 'plan') {
       let result = { session_id: run.plan_session };
-      if (!(await f.remoteExists(sprite, `${row.repo_path}/PLAN.md`))) {
+      const referenceText = run.reference_path ? referenceSnapshot(run.reference_path) : '';
+      const reference = run.reference_path ? `/home/sprite/references/${run.run_id}.md` : 'none';
+      let plan;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (!(await f.remoteExists(sprite, `${row.repo_path}/PLAN.md`))) {
+          result = await f.codexFile(db, sprite, row, 'PLAN.md',
+            `Create a concrete build plan for: ${run.request}. Read RESEARCH.md and reference ${reference}. ` +
+            'End with a fenced factory-tasks JSON object containing acceptance_criteria, optional_ideas, tasks, checks, and delivery. ' +
+            'Each acceptance criterion must be {id,text,source:{kind:"request",quote:exactUserWords} ' +
+            'or {kind:"reference",path:relativeFile,quote:exactReferenceWords},verification}. ' +
+            'Only directly requested or explicitly referenced behavior may block delivery. Put inferred product ideas in optional_ideas. ' +
+            'Tasks must be 1–30 objects {id,file,instruction,depends_on:string[]}; each changes one file. ' +
+            'Checks are command argv arrays for required behavior only. Delivery is {type:"repository"} ' +
+            'or {type:"web",start:argv array,port:number}. Use dependencies and choose a stack from the request and research.',
+            { network: true });
+        }
+        try {
+          plan = validatePlan(extractJson(await sprite.filesystem('/').readFile(`${row.repo_path}/PLAN.md`, 'utf8'), 'factory-tasks'),
+            run.request, referenceText);
+        } catch (error) {
+          if (attempt === 2) throw error;
+          result = await f.codexFile(db, sprite, row, 'PLAN.md',
+            `Repair the factory-tasks JSON schema and sourced acceptance criteria. Validation error: ${error.message}. ` +
+            'Keep inferred product ideas optional and preserve the one-file task graph.', { network: true });
+          continue;
+        }
+        const audit = await f.codexRead(db, sprite, row,
+          `Audit PLAN.md scope against the user's request: ${run.request}. Reference snapshot: ${reference}. ` +
+          'Reject any blocking criterion or required check that adds behavior not directly stated or explicitly supported by the reference. ' +
+          'A general phrase such as mobile-friendly does not imply offline vote replay. ' +
+          'Do not edit files. Return only fenced json: {"approved":boolean,"unsupported_ids":string[],"reason":string}.');
+        const verdict = extractJson(audit.answer);
+        if (verdict.approved === true && Array.isArray(verdict.unsupported_ids)
+          && verdict.unsupported_ids.length === 0) break;
+        if (attempt === 2) throw new f.FactoryError('Independent scope audit rejected PLAN.md');
         result = await f.codexFile(db, sprite, row, 'PLAN.md',
-        `Create a concrete build plan for: ${run.request}. Read RESEARCH.md and any reference snapshot. ` +
-        'Include product behavior, acceptance criteria, dependencies, verification, and delivery. ' +
-        'End the file with a fenced factory-tasks JSON block. Its object must have acceptance_criteria (nonempty string array), ' +
-        'tasks (1–30 objects with id, file, instruction, depends_on string array), checks (array of command argv arrays), ' +
-        'and delivery ({type:"repository"} or {type:"web",start:argv array,port:number}). ' +
-        'Every task changes exactly one file. Include all files required for a working product; do not include generated lockfiles. ' +
-        'Use dependencies when tasks rely on earlier files. Keep the plan generic to this request rather than assuming a framework.',
-        { network: true });
+          `Remove or mark optional unsupported delivery requirements and checks: ${JSON.stringify(verdict)}. ` +
+          'Preserve directly sourced requirements and the one-file task graph.', { network: true });
       }
-      const plan = validatePlan(extractJson(await sprite.filesystem('/').readFile(`${row.repo_path}/PLAN.md`, 'utf8'), 'factory-tasks'));
       for (const task of plan.tasks) {
         db.prepare(`INSERT OR IGNORE INTO factory_tasks (run_id, task_id, file, status)
           VALUES (?, ?, ?, 'pending')`).run(run.run_id, task.id, task.file);
