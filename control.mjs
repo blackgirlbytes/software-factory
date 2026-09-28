@@ -26,10 +26,14 @@ function githubToken() {
   return result.stdout.trim();
 }
 
-function envFile() {
+function envFile(previous = '') {
   const values = { SPRITE_TOKEN: f.secret('SPRITE_TOKEN'),
     OPENAI_API_KEY: f.secret('OPENAI_API_KEY'), GITHUB_TOKEN: githubToken() };
-  try { values.TYPESAFE_API_KEY = f.secret('TYPESAFE_API_KEY'); } catch { /* Jev is optional */ }
+  try { values.TYPESAFE_API_KEY = f.secret('TYPESAFE_API_KEY'); }
+  catch {
+    const saved = previous.match(/^TYPESAFE_API_KEY=(.+)$/m)?.[1]?.trim();
+    if (saved) values.TYPESAFE_API_KEY = saved;
+  }
   for (const value of Object.values(values)) {
     if (/[\r\n]/.test(value)) throw new Error('Credential contains a newline');
   }
@@ -73,7 +77,16 @@ async function deploy() {
     db.close();
     await target.filesystem('/').writeFile(remoteState, readFileSync(localState), { mode: 0o600 });
   }
-  await target.filesystem('/').writeFile(`${remoteRoot}/.env.local`, envFile(), { mode: 0o600 });
+  const remoteEnv = `${remoteRoot}/.env.local`;
+  let previousEnvExists;
+  try { previousEnvExists = await target.execFile('test', ['-e', remoteEnv]); }
+  catch (error) {
+    if (!(error instanceof ExecError)) throw error;
+    previousEnvExists = error.result;
+  }
+  const previousEnv = previousEnvExists.exitCode === 0
+    ? await target.filesystem('/').readFile(remoteEnv, 'utf8') : '';
+  await target.filesystem('/').writeFile(remoteEnv, envFile(previousEnv), { mode: 0o600 });
   await runRemote(target, 'npm', ['ci', '--omit=dev', '--no-audit', '--no-fund']);
   const stream = await target.createService(serviceName,
     { cmd: 'node', args: ['orchestrator.mjs'], dir: remoteRoot }, '5s');
