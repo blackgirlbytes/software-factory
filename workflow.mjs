@@ -162,7 +162,7 @@ function extractJson(text, fence = 'json') {
   catch { throw new f.FactoryError(`Invalid JSON in ${fence} block`); }
 }
 
-function validatePlan(plan, request, referenceText, referenceUse = 'requirements', demo = false) {
+export function validatePlan(plan, request, referenceText, referenceUse = 'requirements', demo = false) {
   if (Array.isArray(plan?.tasks)) {
     // The controller owns these final stages even when a planner lists them.
     plan.tasks = plan.tasks.filter(task => !['REVIEW.md', 'TUTORIAL.md'].includes(task.file));
@@ -362,7 +362,7 @@ async function checkResult(sprite, argv, cwd, timeout) {
   }
 }
 
-async function verifyBuild(sprite, row, plan, { demo = false, criterionIds = null } = {}) {
+export async function verifyBuild(sprite, row, plan, { demo = false, criterionIds = null } = {}) {
   const repoPath = row.repo_path;
   const results = [];
   const checks = plan.checks.map(checkSpec);
@@ -387,7 +387,8 @@ async function verifyBuild(sprite, row, plan, { demo = false, criterionIds = nul
     if (!cached) {
       const started = Date.now();
       const install = await checkResult(sprite,
-        ['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund'], repoPath, 300_000);
+        ['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund'], repoPath,
+        demo ? 300_000 : 600_000);
       results.push({ id: 'dependencies', kind: 'setup', command: ['npm', 'ci'],
         exit_code: install.exitCode, duration_ms: Date.now() - started,
         output: `${install.stdout}${install.stderr}`.slice(-3000) });
