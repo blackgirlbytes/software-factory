@@ -34,6 +34,11 @@ test('reference criteria require a real file and quote', () => {
   assert.throws(() => validateScope({ acceptance_criteria: [{ ...plan.acceptance_criteria[0],
     source: { kind: 'reference', path: 'OTHER.md', quote: 'Room votes persist across refresh.' } }] },
   request, snapshot), ScopeError);
+  const markdownSnapshot = '# Reference source snapshot\n## PLAN.md\n\n```\n## Safety\n\n' +
+    'Room votes persist across refresh.\n```\n';
+  assert.equal(validateScope({ acceptance_criteria: [{ ...criterion,
+    source: { kind: 'reference', path: 'PLAN.md', quote: 'Room votes persist across refresh.' } }] },
+  request, markdownSnapshot).acceptance_criteria.length, 1);
 });
 
 test('duplicate IDs and empty verification are rejected', () => {
