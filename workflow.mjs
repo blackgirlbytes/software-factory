@@ -26,6 +26,7 @@ function ensureTables(db) {
     reference_path TEXT, stage TEXT NOT NULL, status TEXT NOT NULL,
     plan_json TEXT, research_session TEXT, plan_session TEXT, review_json TEXT,
     verification_json TEXT, delivery_json TEXT, error TEXT,
+    review_repairs INTEGER NOT NULL DEFAULT 0, stage_started_ms INTEGER,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`);
@@ -39,12 +40,22 @@ function ensureTables(db) {
     mode TEXT NOT NULL, source TEXT NOT NULL, confidence REAL,
     PRIMARY KEY (run_id, sequence)
   )`);
+  db.exec(`CREATE TABLE IF NOT EXISTS factory_stage_timings (
+    run_id TEXT NOT NULL, sequence INTEGER NOT NULL, stage TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL, outcome TEXT NOT NULL,
+    finished_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (run_id, sequence)
+  )`);
   const columns = new Set(db.prepare('PRAGMA table_info(factory_runs)').all().map(row => row.name));
   if (!columns.has('mode')) {
     db.exec("ALTER TABLE factory_runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'legacy'");
   }
   if (!columns.has('brief_json')) db.exec('ALTER TABLE factory_runs ADD COLUMN brief_json TEXT');
   if (!columns.has('builder_session')) db.exec('ALTER TABLE factory_runs ADD COLUMN builder_session TEXT');
+  if (!columns.has('review_repairs')) {
+    db.exec('ALTER TABLE factory_runs ADD COLUMN review_repairs INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!columns.has('stage_started_ms')) db.exec('ALTER TABLE factory_runs ADD COLUMN stage_started_ms INTEGER');
 }
 
 function parseArgs(args) {
@@ -74,11 +85,26 @@ function activeRun(db, projectId) {
 }
 
 function setStage(db, runId, stage, extra = {}) {
+  const previous = db.prepare('SELECT stage, stage_started_ms FROM factory_runs WHERE run_id = ?').get(runId);
+  const now = Date.now();
+  const stopped = ['failed', 'blocked'].includes(extra.status);
+  const transitioned = previous?.stage !== stage;
+  if ((transitioned || stopped) && previous?.stage_started_ms != null) {
+    const sequence = db.prepare(`SELECT COALESCE(MAX(sequence) + 1, 0) AS n
+      FROM factory_stage_timings WHERE run_id = ?`).get(runId).n;
+    db.prepare(`INSERT INTO factory_stage_timings (run_id, sequence, stage, duration_ms, outcome)
+      VALUES (?, ?, ?, ?, ?)`).run(runId, sequence, previous.stage,
+      Math.max(0, now - previous.stage_started_ms), stopped ? extra.status : 'completed');
+  }
   const fields = ['stage = ?', 'updated_at = CURRENT_TIMESTAMP'];
   const values = [stage];
+  if (transitioned || stopped || (previous?.stage_started_ms == null && extra.status === 'running')) {
+    fields.push('stage_started_ms = ?');
+    values.push(stopped || stage === 'complete' ? null : now);
+  }
   for (const [key, value] of Object.entries(extra)) {
     if (!['status', 'plan_json', 'research_session', 'plan_session', 'review_json',
-      'verification_json', 'delivery_json', 'error', 'builder_session'].includes(key)) throw new Error(`Invalid run field: ${key}`);
+      'verification_json', 'delivery_json', 'error', 'builder_session', 'review_repairs'].includes(key)) throw new Error(`Invalid run field: ${key}`);
     fields.push(`${key} = ?`);
     values.push(value);
   }
@@ -474,9 +500,12 @@ export function workflowStatus(db, projectId) {
   return { run_id: run.run_id, project_id: projectId, stage: run.stage, status: run.status,
     brief: run.brief_json ? JSON.parse(run.brief_json) : null,
     builder_session: run.builder_session,
+    review_repairs: run.review_repairs,
     error: run.error, tasks: db.prepare('SELECT task_id, file, status, commit_sha, checkpoint_id FROM factory_tasks WHERE run_id = ?')
       .all(run.run_id), decisions: db.prepare('SELECT sequence, mode, source, confidence FROM schedule_decisions WHERE run_id = ?')
-      .all(run.run_id), delivery: run.delivery_json ? JSON.parse(run.delivery_json) : null };
+      .all(run.run_id), timings: db.prepare(`SELECT stage, duration_ms, outcome, finished_at
+        FROM factory_stage_timings WHERE run_id = ? ORDER BY sequence`).all(run.run_id),
+    delivery: run.delivery_json ? JSON.parse(run.delivery_json) : null };
 }
 
 export async function runWorkflow({ db, client, row, args }) {
@@ -492,9 +521,11 @@ export async function runWorkflow({ db, client, row, args }) {
   if (!run) {
     if (!input.brief) throw new f.FactoryError('A new demo run needs a short approved brief');
     const id = randomUUID();
-    db.prepare(`INSERT INTO factory_runs (run_id, project_id, request, reference_path, stage, status, mode, brief_json)
-      VALUES (?, ?, ?, ?, 'bootstrap', 'running', 'demo', ?)`)
-      .run(id, row.project_id, input.request, input.referencePath, JSON.stringify(input.brief));
+    db.prepare(`INSERT INTO factory_runs (run_id, project_id, request, reference_path,
+      stage, status, mode, brief_json, stage_started_ms)
+      VALUES (?, ?, ?, ?, 'bootstrap', 'running', 'demo', ?, ?)`)
+      .run(id, row.project_id, input.request, input.referencePath,
+        JSON.stringify(input.brief), Date.now());
     run = activeRun(db, row.project_id);
   }
   setStage(db, run.run_id, run.stage, { status: 'running', error: null });
@@ -648,7 +679,7 @@ export async function runWorkflow({ db, client, row, args }) {
       run = activeRun(db, row.project_id);
       const plan = JSON.parse(run.plan_json);
       let review;
-      let repaired = false;
+      let repaired = run.review_repairs > 0;
       const maxRounds = run.mode === 'demo' ? 2 : 3;
       for (let round = 0; round < maxRounds; round++) {
         const taskSessions = db.prepare(`SELECT session_id, commit_sha, checkpoint_id FROM factory_tasks
@@ -692,6 +723,13 @@ export async function runWorkflow({ db, client, row, args }) {
         }
         if (!Array.isArray(review.findings) || !review.findings.length || round === maxRounds - 1) {
           throw new f.FactoryError('Review did not approve the build; inspect run-status and Sprite');
+        }
+        if (run.mode === 'demo' && run.review_repairs >= 1) {
+          throw new f.FactoryError('Demo repair limit reached; inspect review findings before resuming');
+        }
+        if (run.mode === 'demo') {
+          setStage(db, run.run_id, 'review', { review_repairs: run.review_repairs + 1 });
+          run = activeRun(db, row.project_id);
         }
         const affectedCriteria = new Set();
         for (const finding of review.findings) {
