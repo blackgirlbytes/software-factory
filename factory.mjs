@@ -384,7 +384,10 @@ async function codexFile(db, sprite, row, relativePath, instruction,
   const changes = `${tracked}\n${untracked}`.split(/\r?\n/).filter(Boolean);
   if (result.exitCode !== 0 || !sessionId || changes.length !== 1
     || changes[0] !== relativePath) {
-    throw new FactoryError('Codex file task did not change exactly the requested file; inspect the Sprite before continuing');
+    const lastEvent = events.at(-1)?.type ?? 'none';
+    throw new FactoryError(`Codex file task did not change exactly ${relativePath} ` +
+      `(exit ${result.exitCode}, session ${sessionId ? 'started' : 'missing'}, ` +
+      `changed ${JSON.stringify(changes)}, last event ${lastEvent}); inspect the Sprite before continuing`);
   }
   await remoteRun(sprite, 'git', ['add', '--', relativePath], repoPath);
   await remoteRun(sprite, 'git', ['-c', 'user.name=Software Factory', '-c', 'user.email=factory@localhost',
