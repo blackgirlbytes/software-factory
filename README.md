@@ -11,6 +11,8 @@ node factory.mjs provision my-project
 node factory.mjs bootstrap my-project
 node factory.mjs codex-smoke my-project
 node factory.mjs codex-file my-project README.md -- 'Write a project introduction'
+node factory.mjs run my-project --request 'Build a useful app for ...' --reference-path /path/to/reference-repo
+node factory.mjs run-status my-project
 node factory.mjs status my-project
 node factory.mjs exec my-project -- git --version
 node factory.mjs projects
@@ -22,4 +24,6 @@ node factory.mjs projects
 
 The Codex hook check rejects unexpected user or project hook config. It allows only project trust entries in the user config and does not write Codex's hook trust records. The smoke test checks hook sources immediately before using `--dangerously-bypass-hook-trust` for that invocation, as described in the [Codex hook documentation](https://learn.chatgpt.com/docs/hooks). The Sprite's bundled Codex cannot launch its shell helper, so the factory uses the official CLI. The Sprite process inherits Linux capabilities that Bubblewrap rejects; the controller drops those capabilities with `setpriv` before launching Codex in its read-only sandbox.
 
-The controller can now provision, reconnect, authenticate Codex, create private project remotes, push code and Entire checkpoints, and complete one-file agent tasks. Research, planning, multi-file building, reviewing, scheduling, and tutorials remain to be implemented.
+`run` provisions and bootstraps a project when needed, then uses Codex inside its Sprite to commit `RESEARCH.md` and a `PLAN.md` with acceptance criteria and a dependency graph. It executes each one-file task, runs the plan's checks, reviews the result against the request and Entire sessions, makes bounded one-file fixes, commits `REVIEW.md` and `TUTORIAL.md`, and returns a repository or Sprite web-service delivery. Repeat the same command after a failure to resume its saved run. `run-status` shows task commits, checkpoints, stage, errors, and scheduler decisions. The reference path is a local Git repository used only as read-only source material; it is not the output repository.
+
+Set `TYPESAFE_API_KEY` in the controller environment to let Jev choose between ready independent tasks. The controller enforces dependencies and file ownership, requires at least 0.80 confidence for parallel work, and otherwise runs sequentially. Parallel builds use separate Sprite Git worktrees and push their branches before integration. No TypeSafe key is sent to a Sprite or committed. The workflow needs real product and integration checks before claiming a finished build; its first full validation is the Girl Dinner rebuild.
