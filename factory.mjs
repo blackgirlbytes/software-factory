@@ -402,6 +402,26 @@ async function codexFile(db, sprite, row, relativePath, instruction) {
     commit_sha: commitSha, checkpoint_id: checkpointId, pushed: true };
 }
 
+async function trustCodexProject(sprite, repoPath) {
+  const path = '/home/sprite/.codex/config.toml';
+  const existing = await remoteExists(sprite, path)
+    ? await sprite.filesystem('/').readFile(path, 'utf8') : '';
+  const lines = existing.trim().split(/\r?\n/).filter(Boolean);
+  const trustedProjectsOnly = lines.length % 2 === 0 && lines.every((line, index) =>
+    index % 2 === 0
+      ? /^\[projects\."\/home\/sprite\/projects\/[a-z0-9-]+"\]$/.test(line)
+      : line === 'trust_level = "trusted"');
+  if (!trustedProjectsOnly) {
+    throw new FactoryError('Codex user configuration needs review before trusting this project');
+  }
+  const entry = `[projects."${repoPath}"]`;
+  if (!lines.includes(entry)) {
+    await sprite.filesystem('/').writeFile(path,
+      `${existing.trimEnd()}${existing.trim() ? '\n\n' : ''}${entry}\ntrust_level = "trusted"\n`,
+      { mode: 0o600 });
+  }
+}
+
 async function verifyCodexHooks(sprite, repoPath) {
   const config = await sprite.filesystem('/').readFile(`${repoPath}/.codex/hooks.json`, 'utf8');
   const digest = createHash('sha256').update(config).digest('hex');
@@ -482,6 +502,7 @@ async function bootstrap(db, sprite, projectId, repoUrl) {
   if (!(await remoteExists(sprite, `${repoPath}/.codex/hooks.json`))) {
     await remoteRun(sprite, 'entire', ['agent', 'add', 'codex'], repoPath);
   }
+  await trustCodexProject(sprite, repoPath);
   const status = JSON.parse(await remoteRun(sprite, 'entire', ['status', '--json'], repoPath));
   if (!status.enabled || !status.agents.includes('Codex')) {
     throw new FactoryError('Entire did not enable Codex session tracking');
