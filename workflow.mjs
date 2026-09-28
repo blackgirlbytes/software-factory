@@ -204,8 +204,9 @@ export function validatePlan(plan, request, referenceText, referenceUse = 'requi
   if (demo) {
     const criterionIds = new Set(plan.acceptance_criteria.map(item => item.id));
     const checkIds = new Set();
-    if (!plan.checks.length || plan.checks.length > 2 || !plan.checks.some(check => check?.kind === 'smoke')) {
-      throw new f.FactoryError('A demo needs one core-flow smoke check and at most two focused checks total');
+    if (!plan.checks.length || plan.checks.length > 2
+      || plan.checks.filter(check => check?.kind === 'smoke').length !== 1) {
+      throw new f.FactoryError('A demo needs exactly one core-flow smoke check and at most one build check');
     }
     for (const check of plan.checks) {
       if (!/^[a-z0-9_-]{1,32}$/.test(check?.id ?? '') || checkIds.has(check.id)
@@ -348,6 +349,9 @@ export function selectDemoChecks(plan, criterionIds = null) {
   const checks = plan.checks.map(checkSpec);
   if (criterionIds === null) return checks;
   const wanted = new Set(criterionIds);
+  const matchingSmoke = checks.filter(check => check.kind === 'smoke'
+    && check.criterion_ids.some(id => wanted.has(id)));
+  if (matchingSmoke.length) return matchingSmoke;
   const matching = checks.filter(check => check.criterion_ids.some(id => wanted.has(id)));
   if (matching.length) return matching;
   const smoke = checks.filter(check => check.kind === 'smoke');
