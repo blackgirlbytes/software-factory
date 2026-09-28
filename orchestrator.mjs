@@ -101,7 +101,9 @@ function runFactory(job) {
 
 function classifyFailure(output, attempt) {
   if (/quota exceeded|usage_limit_exceeded/i.test(output)) {
-    return { status: 'blocked', code: 'usage_limit_exceeded', error: 'Codex API quota exceeded' };
+    return { status: 'queued', code: 'usage_limit_exceeded',
+      error: 'Codex API credits unavailable; retrying after a delay',
+      retryAfterMs: Math.min(6 * 60 * 60_000, 60 * 60_000 * 2 ** Math.min(attempt - 1, 3)) };
   }
   if (/Set (SPRITE_TOKEN|OPENAI_API_KEY|GITHUB_TOKEN)|needs exactly one nonempty/i.test(output)) {
     return { status: 'blocked', code: 'missing_credential', error: 'Controller credential is missing' };
