@@ -80,6 +80,10 @@ async function deploy() {
   for await (const event of stream) {
     if (event.type === 'error') throw new Error('Orchestrator Sprite service failed to start');
   }
+  const restarted = await target.restartService(serviceName, '5s');
+  for await (const event of restarted) {
+    if (event.type === 'error') throw new Error('Orchestrator Sprite service failed to restart');
+  }
   const health = await call(target, 'GET', '/health');
   console.log(JSON.stringify({ sprite: target.name, service: serviceName, health }, null, 2));
 }
