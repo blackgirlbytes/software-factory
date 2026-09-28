@@ -168,6 +168,22 @@ async function localCommand(file, args, input = '') {
 }
 
 async function githubApi(endpoint, { method, body, allowMissing = false } = {}) {
+  const token = process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || (() => {
+    try { return secret('GITHUB_TOKEN'); } catch { return null; }
+  })();
+  if (token) {
+    const response = await fetch(`https://api.github.com/${endpoint}`, {
+      method: method ?? 'GET', signal: AbortSignal.timeout(30_000),
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json', 'User-Agent': 'software-factory',
+        'X-GitHub-Api-Version': '2022-11-28' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (allowMissing && response.status === 404) return null;
+    if (!response.ok) throw new FactoryError(`GitHub API request failed: ${endpoint} (HTTP ${response.status})`);
+    try { return await response.json(); }
+    catch { throw new FactoryError(`GitHub API returned invalid JSON: ${endpoint}`); }
+  }
   const args = ['api', endpoint];
   if (method) args.push('--method', method);
   if (body !== undefined) args.push('--input', '-');
