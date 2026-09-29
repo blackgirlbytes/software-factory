@@ -102,7 +102,13 @@ def prepare_project(repo):
     git(repo, 'remote', 'get-url', '--push', remote)
     for key in ('user.name', 'user.email'):
         git(repo, 'config', '--get', key)
-    git(repo, 'push', '--dry-run', remote, 'HEAD:refs/heads/' + branch)
+    has_commit = subprocess.run(['git', 'rev-parse', '--verify', 'HEAD'], cwd=repo,
+                                capture_output=True).returncode == 0
+    if has_commit:
+        git(repo, 'push', '--dry-run', remote, 'HEAD:refs/heads/' + branch)
+    else:
+        # An empty project gets its first commit from the first setup file.
+        git(repo, 'ls-remote', remote)
     template = entire_template()
     ignores = (repo/'.entire/.gitignore').read_text() if (repo/'.entire/.gitignore').exists() else ''
     for line in template['.entire/.gitignore'].splitlines():
