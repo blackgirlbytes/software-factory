@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.11.3",
+  "checkpoint_id": "01M3P8AYK5JQ0WSZQ8TCVJK53B",
+  "session_id": "01a0eb68-c53d-75d2-91e8-2d1af2815734",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-29T09:36:06.26414Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/test_codextown.py"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-astra",
+  "turn_id": "91a6de73c060",
+  "checkpoint_transcript_start": 2344,
+  "transcript_lines_at_start": 2344,
+  "compact_transcript_start": 306,
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-29T09:36:06.17853Z",
+    "agent_lines": 2,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "total_lines_changed": 3,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
