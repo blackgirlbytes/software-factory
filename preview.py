@@ -1,5 +1,6 @@
 """Start and check an approved app preview without another model call."""
 import argparse
+import fcntl
 import functools
 import http.client
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -14,6 +15,9 @@ import subprocess
 import sys
 import time
 from urllib.parse import unquote, urlsplit
+
+# Retain local process handles so callers can reap them on shutdown.
+LOCAL_SERVERS = {}
 
 
 def app_command(repo, port, override=None):
@@ -68,13 +72,21 @@ def available_port(requested=None):
 
 
 def start_preview(repo, directory, override=None, port=None, timeout=60):
+    # Serialize port selection/startup across runs sharing this state directory.
+    with (directory.parent/'.preview.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _start_preview(repo, directory, override, port, timeout)
+
+
+def _start_preview(repo, directory, override, port, timeout):
+    if app_command(repo, 3000, override) is None:
+        return {'status': 'skipped', 'message': 'No web app detected. Use --preview-command for a custom server.'}
     port = available_port(port)
     command = app_command(repo, port, override)
-    if command is None:
-        return {'status': 'skipped', 'message': 'No web app detected. Use --preview-command for a custom server.'}
     launcher = directory/'preview-start.sh'
     launcher.write_text('#!/bin/sh\nset -eu\ncd ' + shlex.quote(str(repo)) + '\n'
-                        + f'export PORT={port} HOST=127.0.0.1\nexec ' + command + '\n')
+                        + f'export PORT={port} HOST=127.0.0.1\nexec /bin/sh -c '
+                        + shlex.quote(command) + '\n')
     launcher.chmod(0o700)
     service = None
     proc = None
@@ -93,6 +105,8 @@ def start_preview(repo, directory, override=None, port=None, timeout=60):
             if proc and proc.poll() is not None:
                 raise RuntimeError('Preview server exited; inspect preview.log.')
             if http_ready(port):
+                if proc:
+                    LOCAL_SERVERS[proc.pid] = proc
                 return {'status': 'ready', 'port': port, 'service': service,
                         'pid': proc.pid if proc else None,
                         'message': 'App responds to HTTP. Visual behavior still needs your review.'}
