@@ -133,11 +133,10 @@ class TrackingTests(unittest.TestCase):
         existing = config/'config.toml'
         existing.write_text('model = "another-model"\n')
         flags = ['-c', 'features.hooks=true', '-c', 'hooks.state."safe".trusted_hash="sha256:abc"']
-        with patch.dict(tracking.os.environ, {'CODEX_HOME':str(config)}), \
-             patch.object(tracking, 'hook_overrides', return_value=flags):
-            result = tracking.hook_profile(self.repo)
+        with patch.object(tracking, 'hook_overrides', return_value=flags):
+            result = tracking.hook_profile(self.repo, config)
             first = (config/(result[1]+'.config.toml')).read_text()
-            self.assertEqual(tracking.hook_profile(self.repo), result)
+            self.assertEqual(tracking.hook_profile(self.repo, config), result)
         self.assertEqual(result[0], '--profile')
         self.assertIn('sha256:abc', first)
         self.assertNotIn('model =', first)
