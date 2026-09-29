@@ -179,6 +179,14 @@ def verify_delivery(repo, tracking):
         message = git(repo, 'show', '-s', '--format=%B', commit)
         if 'Entire-Checkpoint:' not in message:
             raise RuntimeError('Worker commit is missing an Entire checkpoint: ' + commit)
+        entries = git(repo, 'diff-tree', '--root', '--no-commit-id', '--name-status',
+                      '-r', '-M', '-z', commit).split('\0')
+        count = index = 0
+        while index < len(entries) and entries[index]:
+            count += 1
+            index += 3 if entries[index][0] in ('R', 'C') else 2
+        if count != 1:
+            raise RuntimeError('Worker commit must contain exactly one file change: ' + commit)
 
 
 def worker_git_dirs(repo):
