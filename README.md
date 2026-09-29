@@ -38,7 +38,7 @@ runtime directory:
 ```sh
 cd /home/sprite/software-factory
 npm install --prefix "$HOME/.local/share/codextown-runtime" @openai/codex@0.151.0
-export CODEXTOWN_CODEX="$HOME/.local/share/codextown-runtime/node_modules/.bin/codex"
+export CODEXTOWN_CODEX=/home/sprite/software-factory/codex-sprite.sh
 "$CODEXTOWN_CODEX" login --device-auth
 python3 codextown.py run --repo /path/to/target-repository \
   "Implement a small feature and run its tests"
@@ -47,6 +47,8 @@ python3 codextown.py run --repo /path/to/target-repository \
 The current Sprite already has this package and a completed Codex login. For
 later sessions, export `CODEXTOWN_CODEX` as above; installation and login only
 need repeating when the runtime or credentials need replacing.
+The launcher drops the Sprite exec session's inherited Linux capabilities so
+Codex's Bubblewrap sandbox can start. It preserves the per-role sandbox settings.
 
 The target must be a clean Git repository. Existing `AGENTS.md` instructions
 remain authoritative. The planner and reviewer use read-only sandboxes; the
