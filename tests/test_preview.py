@@ -55,7 +55,8 @@ class PreviewTests(unittest.TestCase):
         (self.repo/'escape.txt').symlink_to(secret)
         with patch.object(preview.shutil, 'which', return_value=None):
             result = preview.start_preview(self.repo, self.artifacts, timeout=5)
-        self.addCleanup(os.waitpid, result['pid'], 0)
+        self.addCleanup(preview.LOCAL_SERVERS.pop, result['pid'])
+        self.addCleanup(preview.LOCAL_SERVERS[result['pid']].wait)
         self.addCleanup(os.killpg, result['pid'], signal.SIGTERM)
         for path, expected in [('/', 200), ('/.env', 404), ('/%2eenv', 404),
                                ('/empty/', 404), ('/escape.txt', 404)]:
@@ -66,6 +67,16 @@ class PreviewTests(unittest.TestCase):
             if path == '/':
                 self.assertIn(b'Preview works', response.read())
             conn.close()
+
+    def test_custom_compound_command_receives_port_and_host(self):
+        (self.repo/'index.html').write_text('<h1>Custom app</h1>')
+        command = 'true && python3 -m http.server "$PORT" --bind "$HOST"'
+        with patch.object(preview.shutil, 'which', return_value=None):
+            result = preview.start_preview(self.repo, self.artifacts, command, timeout=5)
+        self.addCleanup(preview.LOCAL_SERVERS.pop, result['pid'])
+        self.addCleanup(preview.LOCAL_SERVERS[result['pid']].wait)
+        self.addCleanup(os.killpg, result['pid'], signal.SIGTERM)
+        self.assertTrue(preview.http_ready(result['port']))
 
     def test_failed_start_never_reports_ready(self):
         with patch.object(preview.shutil, 'which', return_value=None):
