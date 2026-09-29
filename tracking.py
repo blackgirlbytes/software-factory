@@ -188,6 +188,26 @@ def worker_git_dirs(repo):
                              for flag in ('--git-dir', '--git-common-dir')))
 
 
+def hook_profile(repo):
+    overrides = hook_overrides(repo)
+    if not overrides:
+        return ['--ignore-user-config']
+    name = 'codextown-' + hashlib.sha256(str(repo).encode()).hexdigest()[:16]
+    config_dir = Path(os.environ.get('CODEX_HOME', str(Path.home()/'.codex')))
+    path = config_dir/(name + '.config.toml')
+    marker = '# Managed by Codextown: verified Entire hooks only.\n'
+    content = marker + '\n'.join(overrides[1::2]) + '\n'
+    if path.exists() and not path.read_text().startswith(marker):
+        raise RuntimeError('Refusing to overwrite an unrelated Codex profile: ' + str(path))
+    config_dir.mkdir(parents=True, exist_ok=True)
+    if not path.exists() or path.read_text() != content:
+        path.write_text(content)
+        path.chmod(0o600)
+    # Codex accepts hook approvals from user/profile layers, not generic -c
+    # overrides. Explicit model/effort/sandbox flags still win over the profile.
+    return ['--profile', name]
+
+
 def finish_tracking(repo, tracking):
     # Pre-push syncs session records after final worker/reviewer hook events.
     git(repo, 'push', tracking['remote'], 'HEAD:refs/heads/' + tracking['branch'])
