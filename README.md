@@ -31,14 +31,22 @@ signing in to the same organization.
 ## Run a task inside the Sprite
 
 Requires Python 3.10+, Git, and a Codex CLI supporting `--ignore-user-config`.
-The initial Sprite supplies Python 3.13 and Codex CLI 0.151.0.
+The initial Sprite supplies Python 3.13. Its preinstalled Codex executable lacks
+the Code Mode helper, so use the complete official npm package in a separate
+runtime directory:
 
 ```sh
 cd /home/sprite/software-factory
-codex login --device-auth
+npm install --prefix "$HOME/.local/share/codextown-runtime" @openai/codex@0.151.0
+export CODEXTOWN_CODEX="$HOME/.local/share/codextown-runtime/node_modules/.bin/codex"
+"$CODEXTOWN_CODEX" login --device-auth
 python3 codextown.py run --repo /path/to/target-repository \
   "Implement a small feature and run its tests"
 ```
+
+The current Sprite already has this package and a completed Codex login. For
+later sessions, export `CODEXTOWN_CODEX` as above; installation and login only
+need repeating when the runtime or credentials need replacing.
 
 The target must be a clean Git repository. Existing `AGENTS.md` instructions
 remain authoritative. The planner and reviewer use read-only sandboxes; the
