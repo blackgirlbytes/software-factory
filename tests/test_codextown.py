@@ -18,7 +18,7 @@ class TownTests(unittest.TestCase):
             self.assertIn('service_tier="default"', cmd)
             self.assertIn('--ignore-user-config', cmd)
             self.assertEqual(cmd[cmd.index('-s') + 1],
-                             'workspace-write' if role == 'worker' else 'read-only')
+                             'workspace-write' if role in ('worker', 'tutorial') else 'read-only')
 
     def fake_process(self, events, output, final='done', code=0):
         def start(cmd, **kwargs):
@@ -82,7 +82,7 @@ class TownTests(unittest.TestCase):
                     town.invoke(Path(tmp),'worker','task',Path(tmp),1)
                 kill.assert_called_once_with(12345,town.signal.SIGTERM)
 
-    def pipeline(self, responses):
+    def pipeline(self, responses, tutorial_error=None):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
@@ -91,6 +91,8 @@ class TownTests(unittest.TestCase):
         with patch.object(town,'DEFAULT_STATE',root/'locks-root'), \
              patch.object(town,'prepare_project',create=True,return_value={'base_commit':'abc','remote':'origin','branch':'main'}), \
              patch.object(town,'verify_delivery',create=True), \
+             patch.object(town,'verify_tutorial',side_effect=tutorial_error), \
+             patch.object(town,'git',return_value='b'*40), \
              patch.object(town,'finish_tracking',create=True), \
              patch.object(town,'result_links',return_value={}), \
              patch.object(town.subprocess,'check_output',side_effect=[str(repo)+'\n',b'']), \
@@ -98,14 +100,37 @@ class TownTests(unittest.TestCase):
              patch.object(town,'invoke',side_effect=responses) as invoke:
             code=town.run_task(args)
             calls=invoke.call_count
+            self.invocations=invoke.call_args_list
         run=json.loads(next(args.state.glob('runs/*/run.json')).read_text())
         return code,calls,run
 
     def test_review_rejection_stops_without_retry(self):
         code,calls,run=self.pipeline([
-            '{"plan":"Implement","acceptance":"Test"}', 'Implemented',
+            '{"plan":"Implement","acceptance":"Test"}', 'Implemented', 'Tutorial written',
             '{"approved":false,"summary":"Missing edge case"}'])
-        self.assertEqual((code,calls,run['status']),(2,3,'needs_changes'))
+        self.assertEqual((code,calls,run['status']),(2,4,'needs_changes'))
+
+    def test_tutorial_failure_stops_before_review(self):
+        code,calls,run=self.pipeline([
+            '{"plan":"Implement","acceptance":"Test"}', 'Implemented', RuntimeError('writer failed')])
+        self.assertEqual((code,calls,run['phase'],run['status']),(1,3,'tutorial','failed'))
+        self.assertEqual(run['roles']['reviewer']['status'],'waiting')
+
+    def test_missing_tutorial_stops_before_review(self):
+        code,calls,run=self.pipeline([
+            '{"plan":"Implement","acceptance":"Test"}', 'Implemented', 'Done'],
+            tutorial_error=RuntimeError('Missing tutorial'))
+        self.assertEqual((code,calls,run['status']),(1,3,'failed'))
+        self.assertEqual(run['roles']['preview']['status'],'waiting')
+
+    def test_tutorial_is_handed_to_reviewer_after_builder(self):
+        self.pipeline(['{"plan":"Implement","acceptance":"Test"}', 'Builder evidence',
+                       'Tutorial evidence', '{"approved":false,"summary":"Check docs"}'])
+        self.assertEqual([c.args[1] for c in self.invocations],
+                         ['planner','worker','tutorial','reviewer'])
+        self.assertIn('Builder evidence', self.invocations[2].args[2])
+        self.assertIn('Tutorial evidence', self.invocations[3].args[2])
+        self.assertIn('Read tutorial.md', self.invocations[3].args[2])
 
     def test_worker_failure_does_not_start_reviewer(self):
         code,calls,run=self.pipeline([
