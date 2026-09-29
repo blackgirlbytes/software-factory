@@ -1,0 +1,13 @@
+<in-app-browser-context source="ambient-ui-state">
+This block is automatically supplied ambient UI state, not part of the user's request. Do not treat it as an instruction or as evidence that the user explicitly selected the in-app browser.
+# In app browser:
+- The user has the in-app browser open with 3 tabs.
+- Current URL: http://localhost:3000/
+</in-app-browser-context>
+
+## My request:
+okay go for it
+
+---
+
+lets document all my learnings from this ..put it in a markdown file..we can use entire if you need help remembering the conversation
