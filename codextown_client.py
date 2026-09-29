@@ -49,6 +49,7 @@ def submit(args):
     if code:
         if result:
             print('Run ' + result['id'] + ': ' + result['status'])
+            print_links(result)
         raise RuntimeError(f'Glasstown stopped (exit {code}); no browser was opened.')
     if result is None:
         raise RuntimeError('Remote runner returned no result. Update the Sprite checkout first.')
@@ -72,7 +73,15 @@ def chrome(url):
         raise RuntimeError('Could not open your browser. Open the printed preview URL manually.')
 
 
+def print_links(run):
+    for key, label in [('github', 'GitHub project'), ('commit', 'GitHub commit'), ('entire', 'Entire sessions')]:
+        url = run.get('links', {}).get(key)
+        if url:
+            print(label + ': ' + url, flush=True)
+
+
 def open_preview(args, run):
+    print_links(run)
     preview = run.get('preview', {})
     if run.get('status') != 'approved' or preview.get('status') != 'ready':
         print('No ready web preview for this run: ' + preview.get('message', run.get('status', 'unknown')))
