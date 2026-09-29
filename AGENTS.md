@@ -7,7 +7,7 @@
 - Never commit credentials, secrets, ignored runtime data, or unrelated edits.
 - If a commit or push fails, report the blocker before changing another file.
 
-## Codextown
+## Glasstown
 
 This repository implements a small Codex adaptation of Goosetown's plan, build,
 and review workflow. It runs inside one persistent Sprite.
@@ -21,7 +21,7 @@ and review workflow. It runs inside one persistent Sprite.
 - Run `python3 -m unittest discover -s tests` after runner changes.
 
 <!-- codextown:tracking -->
-## Codextown history and commits
+## Glasstown history and commits
 
 - Entire records this project's Codex sessions and links them to Git commits.
 - Immediately after creating, modifying, renaming, or deleting ONE file, commit
