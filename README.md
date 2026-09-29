@@ -8,6 +8,14 @@ of Goosetown's Goose extensions or dashboard.
 Glasstown captures Codex sessions with Entire and links them to the code changes.
 Existing `codextown` command names, service names, and state paths remain compatible.
 
+The dashboard and final client output include the GitHub project, the exact code
+commit, and an Entire link to the commit’s captured sessions. These links are
+derived from the project’s GitHub push remote. Other Git hosts omit these links.
+If the current commit has no checkpoint, the Entire link opens the repository.
+Entire may require sign-in and repository access; newly pushed sessions may take
+time to appear. Links remain available when an app preview fails or is skipped.
+Older saved runs without link metadata continue to work.
+
 ## Cost defaults
 
 All three roles use **`gpt-5.6-luna` with low reasoning**. The runner explicitly
