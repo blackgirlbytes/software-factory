@@ -15,13 +15,14 @@ import time
 import uuid
 
 from preview import start_preview
-from tracking import prepare_project, hook_profile, worker_git_dirs, verify_delivery, finish_tracking, result_links
+from tracking import prepare_project, hook_profile, worker_git_dirs, verify_delivery, finish_tracking, result_links, git
 
 MODEL = 'gpt-5.6-luna'
 EFFORT = 'low'
 CODEX_BIN = os.environ.get('CODEXTOWN_CODEX', 'codex')
 DEFAULT_STATE = Path.home() / '.local/state/codextown'
-ROLES = ('planner', 'worker', 'reviewer', 'preview')
+ROLES = ('planner', 'worker', 'tutorial', 'reviewer', 'preview')
+WRITING_ROLES = ('worker', 'tutorial')
 PLAN_SCHEMA = {'type': 'object', 'additionalProperties': False,
     'properties': {'plan': {'type': 'string'}, 'acceptance': {'type': 'string'}},
     'required': ['plan', 'acceptance']}
@@ -78,11 +79,11 @@ def command(repo, role, output, schema=None):
     cmd = [CODEX_BIN, '-a', 'never', 'exec',
            '-m', MODEL, '-c', 'model_reasoning_effort="low"',
            '-c', 'service_tier="default"',
-           '-s', 'workspace-write' if role == 'worker' else 'read-only',
+           '-s', 'workspace-write' if role in WRITING_ROLES else 'read-only',
            '-C', str(repo), '--json', '-o', str(output)]
     cmd += hook_profile(repo)
-    if role == 'worker':
-        # The worker is explicitly required to create and push Git commits.
+    if role in WRITING_ROLES:
+        # Both writers must create and push Git commits.
         cmd += ['-c', 'sandbox_workspace_write.network_access=true']
         for directory in worker_git_dirs(repo):
             cmd += ['--add-dir', directory]
@@ -138,6 +139,19 @@ def invoke(repo, role, prompt, directory, timeout, schema=None, on_event=None):
     return output.read_text()
 
 
+def verify_tutorial(repo, base):
+    path = repo / 'tutorial.md'
+    if path.is_symlink() or not path.is_file() or not path.read_text().strip():
+        raise RuntimeError('Tutorial writer must leave a nonempty regular tutorial.md.')
+    git(repo, 'ls-files', '--error-unmatch', '--', 'tutorial.md')
+    # Check each commit, including changes later reverted by the writer.
+    for commit in git(repo, 'rev-list', base + '..HEAD').splitlines():
+        paths = git(repo, 'diff-tree', '--root', '--no-commit-id', '--name-only',
+                    '-r', '-z', commit).strip('\0').split('\0')
+        if any(name != 'tutorial.md' for name in paths):
+            raise RuntimeError('Tutorial writer changed files outside tutorial.md.')
+
+
 def run_task(args):
     repo = args.repo.resolve()
     root = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', '--show-toplevel'], text=True).strip()
@@ -186,7 +200,7 @@ def run_task(args):
                    'Do not deploy, alter credentials, delete repositories, or create more agents. '
                    'Keep the response concise. You are part of a bounded Goosetown-inspired workflow.\n'
                    'User task:\n' + args.task + '\n')
-        post('town', 'Run created; three model roles, then app preview. Low reasoning, no automatic retries.')
+        post('town', 'Run created; four model roles, then app preview. Low reasoning, no automatic retries.')
         try:
             plan = json.loads(agent('planner', context +
                 'Inspect the repository read-only. Produce a small implementation plan and concrete acceptance checks.', PLAN_SCHEMA))
@@ -199,16 +213,40 @@ def run_task(args):
                 'For web apps, leave dependencies ready and a dev/start script (respect PORT) or a static index.html '
                 'so the final preview worker can launch it. Do not leave a dev server running yourself.')
             verify_delivery(repo, tracking)
+            run['phase'] = 'tutorial'
+            tutorial_path = repo / 'tutorial.md'
+            if tutorial_path.is_symlink() or (tutorial_path.exists() and not tutorial_path.is_file()):
+                raise RuntimeError('Refusing an unsafe tutorial.md path.')
+            tutorial_base = git(repo, 'rev-parse', 'HEAD')
+            tutorial = agent('tutorial', context + '\nPlan:\n' + json.dumps(plan)[:24000] +
+                '\nBuilder report (verify against the actual code):\n' + worker[:12000] +
+                '\nRead the implemented project and create or update ONLY tutorial.md at the repository root. '
+                'Write a beginner-friendly tutorial explaining what was built, prerequisites, exact setup/run '
+                'commands, how to use it, the main files and data flow, a walkthrough of important code, '
+                'one small optional extension exercise, troubleshooting, and known limitations. '
+                'Use real project paths and commands; distinguish verified behavior from untested hardware '
+                'or external integrations. Never invent features or test results. Preserve useful existing '
+                'tutorial content. Do not change source code, install dependencies, or implement the exercise. '
+                'Commit and push tutorial.md immediately after changing it, following AGENTS.md and retaining '
+                'Entire hooks. If already accurate, leave it unchanged. Report the tutorial path and checks.')
+            verify_tutorial(repo, tutorial_base)
+            verify_delivery(repo, tracking)
+            tutorial_head = git(repo, 'rev-parse', 'HEAD')
             review = json.loads(agent('reviewer', context + '\nPlan:\n' + json.dumps(plan)[:24000] +
                 '\nWorker report (verify it independently):\n' + worker[:12000] +
+                '\nTutorial writer report (verify it independently):\n' + tutorial[:8000] +
                 '\nReview the committed changes with git diff ' + tracking['base_commit'] +
                 '..HEAD, plus the working tree, read-only. Check correctness and test evidence. '
+                'Read tutorial.md and verify its setup commands, file references, explanations, exercise, '
+                'and limitations match the implemented project. Reject misleading or missing documentation. '
                 'Approve only if the task and acceptance checks are satisfied.', REVIEW_SCHEMA))
             if type(review.get('approved')) is not bool or not isinstance(review.get('summary'), str):
                 raise RuntimeError('Reviewer returned an invalid verdict.')
             finish_tracking(repo, tracking)
             try:
                 run['links'] = result_links(repo, tracking)
+                if run['links'].get('github'):
+                    run['links']['tutorial'] = run['links']['github'] + '/blob/' + tutorial_head + '/tutorial.md'
             except (RuntimeError, OSError, ValueError):
                 post('town', 'Project links unavailable; code and session sync completed.')
             save(directory / 'review.json', review)
