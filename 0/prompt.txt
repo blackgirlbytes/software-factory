@@ -1,0 +1,5 @@
+lets document all my learnings from this ..put it in a markdown file..we can use entire if you need help remembering the conversation
+
+---
+
+what about the commands to run a sprite and do this stuff on your own without an agent
