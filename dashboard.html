@@ -23,6 +23,8 @@
 <div class="station" id="preview" data-status="waiting"><div class="house"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M5 8h30v23H5zM5 14h30M14 36h12M20 31v5M10 11h1m3 0h1"/></svg></div><b>Preview studio</b><small>Waiting</small></div>
 </div>
 <p id="preview-note" class="empty" role="status">After approval, the preview worker starts your web app.</p>
+<p id="project-links" aria-label="Project and session links"></p>
+<p id="links-note" class="empty" hidden>Entire may require sign-in and repository access; newly pushed sessions can take time to appear.</p>
 <div class="details"><div><span>Model</span><strong id="model">gpt-5.6-luna</strong></div><div><span>Reasoning</span><strong>low</strong></div><div><span>Reported tokens</span><strong id="tokens">—</strong></div></div>
 </section>
 <aside class="panel"><label class="eyebrow" for="runs">Run history</label><select id="runs" aria-label="Choose a run"><option>No runs yet</option></select><h2>Town Wall</h2><ol class="wall" id="wall"><li class="empty">Agent progress will appear here when a task starts.</li></ol></aside>
@@ -36,6 +38,13 @@ function render(data){$('model').textContent=data.model;current=data.runs;const 
 $('runs').replaceChildren();for(const run of current){const option=document.createElement('option');option.value=run.id;option.textContent=new Date(run.created).toLocaleString()+' · '+label(run.status);$('runs').append(option)}
 if(!current.length){const option=document.createElement('option');option.textContent='No runs yet';$('runs').append(option);return}
 if(selected&&current.some(r=>r.id===selected))$('runs').value=selected;const run=current.find(r=>r.id===$('runs').value)||current[0];
+$('project-links').replaceChildren();
+for(const [key,title,host] of [['github','GitHub project','github.com'],['commit','View commit','github.com'],['entire','Entire sessions','entire.io']]){
+const value=run.links?.[key];if(!value)continue;let url;try{url=new URL(value)}catch{continue}
+if(url.protocol!=='https:'||url.hostname!==host||url.username||url.password)continue;
+const link=document.createElement('a');link.href=url.href;link.textContent=title;link.target='_blank';link.rel='noopener noreferrer';
+if($('project-links').childNodes.length)$('project-links').append(' · ');$('project-links').append(link)}
+$('links-note').hidden=!run.links?.entire;
 $('task').textContent=run.task;$('status').textContent=label(run.status);let tokens=0;
 for(const role of ['planner','worker','reviewer','preview']){const info=run.roles[role]||{status:'skipped'};const state=run.status==='interrupted'&&info.status==='running'?'interrupted':info.status;$(role).dataset.status=state;$(role).querySelector('small').textContent=label(state);tokens+=(info.usage?.input_tokens||0)+(info.usage?.output_tokens||0)}
 $('preview-note').textContent=run.preview?.status==='ready'?'App ready on Sprite port '+run.preview.port+'. The Mac client opens it in Chrome.':run.preview?.status==='failed'?'The code passed review, but the preview could not start. Check the run logs.':run.preview?.message||'After approval, the preview worker starts your web app.';
