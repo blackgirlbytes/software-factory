@@ -91,6 +91,8 @@ def prepare_project(repo):
         raise RuntimeError('Project must be clean before configuring tracking.')
     if git(repo, 'ls-files', '--', '.entire/settings.local.json'):
         raise RuntimeError('Remove machine-local Entire settings from Git before preparing this project.')
+    if (repo/'.entire/settings.local.json').is_symlink():
+        raise RuntimeError('Machine-local Entire settings must not be a symlink.')
     branch = git(repo, 'symbolic-ref', '--short', 'HEAD')
     remote = git(repo, 'config', '--get', 'branch.' + branch + '.remote') if subprocess.run(
         ['git', 'config', '--get', 'branch.' + branch + '.remote'], cwd=repo,
@@ -196,12 +198,12 @@ def worker_git_dirs(repo):
                              for flag in ('--git-dir', '--git-common-dir')))
 
 
-def hook_profile(repo):
+def hook_profile(repo, config_dir=None):
     overrides = hook_overrides(repo)
     if not overrides:
         return ['--ignore-user-config']
     name = 'codextown-' + hashlib.sha256(str(repo).encode()).hexdigest()[:16]
-    config_dir = Path(os.environ.get('CODEX_HOME', str(Path.home()/'.codex')))
+    config_dir = config_dir or Path(os.environ.get('CODEX_HOME', str(Path.home()/'.codex')))
     path = config_dir/(name + '.config.toml')
     marker = '# Managed by Codextown: verified Entire hooks only.\n'
     content = marker + '\n'.join(overrides[1::2]) + '\n'
