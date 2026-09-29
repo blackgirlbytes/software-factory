@@ -91,7 +91,8 @@ class PreviewTests(unittest.TestCase):
         with patch.object(town, 'DEFAULT_STATE', self.root/'locks'), \
              patch.object(town, 'prepare_project', create=True, return_value={'base_commit':'abc','remote':'origin','branch':'main'}), \
              patch.object(town, 'verify_delivery', create=True), \
-             patch.object(town, 'finish_tracking', create=True), \
+             patch.object(town, 'finish_tracking', create=True),
+             patch.object(town, 'result_links', return_value={'github':'https://github.com/org/project', 'entire':'https://entire.io/gh/org/project'}), \
              patch.object(town.subprocess, 'check_output', side_effect=[str(self.repo)+'\n', b'']), \
              patch.object(town.subprocess, 'run', return_value=SimpleNamespace(returncode=0)), \
              patch.object(town, 'invoke', side_effect=outputs), \
@@ -109,11 +110,13 @@ class PreviewTests(unittest.TestCase):
         code, calls, run, review = self.pipeline(True, [{'status': 'ready', 'port': 3000}])
         self.assertEqual((code, calls, run['status']), (0, 1, 'approved'))
         self.assertEqual(run['roles']['preview']['status'], 'complete')
+        self.assertEqual(town.public_run(run)['links']['entire'], 'https://entire.io/gh/org/project')
 
     def test_preview_failure_preserves_approval_and_stops(self):
         code, calls, run, review = self.pipeline(True, RuntimeError('secret internal error'))
         self.assertEqual((code, calls, run['status']), (3, 1, 'preview_failed'))
         self.assertTrue(review['approved'])
+        self.assertEqual(town.public_run(run)['links']['github'], 'https://github.com/org/project')
         self.assertNotIn('secret internal error', json.dumps(town.public_run(run)))
 
     def test_client_never_opens_unapproved_preview(self):
