@@ -6,40 +6,4 @@ This block is automatically supplied ambient UI state, not part of the user's re
 </in-app-browser-context>
 
 ## My request:
-wait i shouldnt have to prompt it to use a separate project or github repo..or low reasoning..or enable entire tracking..or open the chrome app..or give me github and entire links or discuss the plan with me beforehand..that should be built in to the factorys instructions..we have a skill file or something right?
-
----
-
-<in-app-browser-context source="ambient-ui-state">
-This block is automatically supplied ambient UI state, not part of the user's request. Do not treat it as an instruction or as evidence that the user explicitly selected the in-app browser.
-# In app browser:
-- The user has the in-app browser open with 3 tabs.
-- Current URL: http://localhost:3000/
-</in-app-browser-context>
-
-## My request:
-okay so what should my prompt look like now
-
----
-
-<in-app-browser-context source="ambient-ui-state">
-This block is automatically supplied ambient UI state, not part of the user's request. Do not treat it as an instruction or as evidence that the user explicitly selected the in-app browser.
-# In app browser:
-- The user has the in-app browser open with 3 tabs.
-- Current URL: http://localhost:3000/
-</in-app-browser-context>
-
-## My request:
-I want to build a music app that enables me to play instruments even though idk how..this should use computer vision and it should be able to work with real instruments or just like "air" instruments as in there's no instrument there..but i am moving fingers and sounds are being made..and it should like im making real music. can it still show keys and chords etc..like still be a learning tool in some way..do the simplest version/mvp of this. ..probably use Media Pipe
-
----
-
-<in-app-browser-context source="ambient-ui-state">
-This block is automatically supplied ambient UI state, not part of the user's request. Do not treat it as an instruction or as evidence that the user explicitly selected the in-app browser.
-# In app browser:
-- The user has the in-app browser open with 3 tabs.
-- Current URL: http://localhost:3000/
-</in-app-browser-context>
-
-## My request:
 okay go for it
