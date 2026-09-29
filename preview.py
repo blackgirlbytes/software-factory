@@ -135,6 +135,9 @@ class StaticHandler(SimpleHTTPRequestHandler):
         if any(p.startswith('.') for p in parts if p not in ('/', '.')) or not target.is_relative_to(root):
             self.send_error(404)
             return None
+        if any(p.startswith('.') for p in target.relative_to(root).parts):
+            self.send_error(404)
+            return None
         return super().send_head()
 
     def list_directory(self, path):
