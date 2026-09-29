@@ -89,6 +89,8 @@ def commit_file(repo, name, content, remote, branch):
 def prepare_project(repo):
     if git(repo, 'status', '--porcelain'):
         raise RuntimeError('Project must be clean before configuring tracking.')
+    if git(repo, 'ls-files', '--', '.entire/settings.local.json'):
+        raise RuntimeError('Remove machine-local Entire settings from Git before preparing this project.')
     branch = git(repo, 'symbolic-ref', '--short', 'HEAD')
     remote = git(repo, 'config', '--get', 'branch.' + branch + '.remote') if subprocess.run(
         ['git', 'config', '--get', 'branch.' + branch + '.remote'], cwd=repo,
@@ -177,3 +179,15 @@ def verify_delivery(repo, tracking):
         message = git(repo, 'show', '-s', '--format=%B', commit)
         if 'Entire-Checkpoint:' not in message:
             raise RuntimeError('Worker commit is missing an Entire checkpoint: ' + commit)
+
+
+def worker_git_dirs(repo):
+    if not (repo/'.git').exists():
+        return [str(repo/'.git')]
+    return list(dict.fromkeys(git(repo, 'rev-parse', '--path-format=absolute', flag)
+                             for flag in ('--git-dir', '--git-common-dir')))
+
+
+def finish_tracking(repo, tracking):
+    # Pre-push syncs session records after final worker/reviewer hook events.
+    git(repo, 'push', tracking['remote'], 'HEAD:refs/heads/' + tracking['branch'])
