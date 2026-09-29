@@ -74,7 +74,7 @@ def chrome(url):
 
 
 def print_links(run):
-    for key, label in [('github', 'GitHub project'), ('commit', 'GitHub commit'), ('entire', 'Entire sessions')]:
+    for key, label in [('github', 'GitHub project'), ('commit', 'GitHub commit'), ('entire', 'Entire sessions'), ('tutorial', 'Tutorial')]:
         url = run.get('links', {}).get(key)
         if url:
             print(label + ': ' + url, flush=True)
