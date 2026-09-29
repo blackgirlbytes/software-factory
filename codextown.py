@@ -15,7 +15,7 @@ import time
 import uuid
 
 from preview import start_preview
-from tracking import prepare_project, hook_overrides, worker_git_dirs, verify_delivery, finish_tracking
+from tracking import prepare_project, hook_profile, worker_git_dirs, verify_delivery, finish_tracking
 
 MODEL = 'gpt-5.6-luna'
 EFFORT = 'low'
@@ -75,12 +75,12 @@ def snapshot(state):
 
 
 def command(repo, role, output, schema=None):
-    cmd = [CODEX_BIN, '-a', 'never', 'exec', '--ignore-user-config',
+    cmd = [CODEX_BIN, '-a', 'never', 'exec',
            '-m', MODEL, '-c', 'model_reasoning_effort="low"',
            '-c', 'service_tier="default"',
            '-s', 'workspace-write' if role == 'worker' else 'read-only',
            '-C', str(repo), '--json', '-o', str(output)]
-    cmd += hook_overrides(repo)
+    cmd += hook_profile(repo)
     if role == 'worker':
         # The worker is explicitly required to create and push Git commits.
         cmd += ['-c', 'sandbox_workspace_write.network_access=true']
