@@ -1,0 +1,21 @@
+<in-app-browser-context source="ambient-ui-state">
+This block is automatically supplied ambient UI state, not part of the user's request. Do not treat it as an instruction or as evidence that the user explicitly selected the in-app browser.
+# In app browser:
+- The user has the in-app browser open with 3 tabs.
+- Current URL: http://localhost:3000/
+</in-app-browser-context>
+
+## My request:
+lets call it glasstown cuz we capture the sessions
+
+---
+
+<in-app-browser-context source="ambient-ui-state">
+This block is automatically supplied ambient UI state, not part of the user's request. Do not treat it as an instruction or as evidence that the user explicitly selected the in-app browser.
+# In app browser:
+- The user has the in-app browser open with 3 tabs.
+- Current URL: http://localhost:3000/
+</in-app-browser-context>
+
+## My request:
+oh does it run entire enable -y on the project that the sprite creates. i think the preview worker should also give the link to the github url and the entire io url..do you think thats possible..or no
