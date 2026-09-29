@@ -327,6 +327,361 @@ reliable physical-instrument recognition. The most useful next evidence is
 whether someone can position a hand, discover the pinch interaction, make a
 short musical phrase, and understand the notes they played.
 
+## 15. Terminal cookbook: operate this yourself
+
+You can operate the factory without this coordinating chat. **Glasstown still
+runs Codex agents internally.** If you mean no AI calls at all, use the manual
+server example below instead. The Sprites CLI works without an MCP client.
+
+Commands below target our configured environment. Run one step at a time and
+stop if it fails; do not paste the whole chapter as one script. Blocks are
+labeled **Mac** or **Sprite** because the two machines have different files,
+processes, and logins. Replace example project names and task text as needed.
+
+### A. Connect to the existing Sprite
+
+**Mac — Terminal:** make the installed CLI available in this terminal, list the
+Sprites, and run a remote command:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+sprite list
+sprite exec -s mcp-rizel-codextown --no-port-forward --no-stdin -- pwd
+```
+
+If access is not already configured, sign in, then try the listing again:
+
+```sh
+sprite login -o rizel-scarlett-105
+```
+
+There is no separate boot command needed for this workflow: connecting or
+executing a command wakes the Sprite. For an interactive Linux terminal:
+
+```sh
+sprite console -s mcp-rizel-codextown --no-port-forward
+```
+
+You are now **inside the Sprite**. Use `exit` to return to the Mac. We disable
+automatic port forwarding here so later proxy commands own their ports explicitly.
+
+### B. Check the setup and update the factory when idle
+
+**Sprite:** check the runner's status first. If a build is running, wait for it
+to finish before updating its code.
+
+```sh
+cd /home/sprite/software-factory
+python3 codextown.py status
+git status --short
+```
+
+If the factory is idle and Git reports no local changes:
+
+```sh
+git pull --ff-only
+```
+
+Check remote tool authentication and Git identity:
+
+```sh
+/home/sprite/software-factory/codex-sprite.sh login status
+gh auth status
+git config user.name
+git config user.email
+entire version
+```
+
+The existing Sprite is configured. Only repair a login if its check fails.
+For Codex, run this **inside the Sprite**:
+
+```sh
+/home/sprite/software-factory/codex-sprite.sh login --device-auth
+```
+
+Use the URL and fresh code it prints. On the **Mac**, open that URL in Chrome:
+
+```sh
+open -a 'Google Chrome' 'PASTE_THE_LOGIN_URL_HERE'
+```
+
+For a missing GitHub login, run **inside the Sprite**:
+
+```sh
+gh auth login
+gh auth setup-git
+```
+
+If Git identity is missing, set it inside the Sprite with your own name and email:
+
+```sh
+git config --global user.name 'YOUR_NAME'
+git config --global user.email 'YOUR_COMMIT_EMAIL'
+```
+
+### C. Start a new product repository
+
+Skip this section for follow-up work on Airkeys or another existing project.
+Choose an unused name both inside the Sprite and on your GitHub account. The
+example below creates a real private GitHub repository when you run it.
+
+**Sprite:** set the new name and inspect whether it already exists:
+
+```sh
+project_slug=gesture-jam
+project_dir="/home/sprite/projects/$project_slug"
+gh repo view "$project_slug"
+ls -ld "$project_dir"
+```
+
+Proceed only after establishing that the name is unused. A network or login
+error from GitHub is not evidence that a repository does not exist. If a project
+already exists, use it intentionally or choose a different name.
+
+**Sprite:** create the directory, initialize Git, create its private remote, and
+prepare tracking. The `&&` operators stop this sequence on a failed step:
+
+```sh
+mkdir -p /home/sprite/projects &&
+mkdir "$project_dir" &&
+git init -b main "$project_dir" &&
+gh repo create "$project_slug" --private --source "$project_dir" --remote origin &&
+python3 /home/sprite/software-factory/codextown.py prepare --repo "$project_dir"
+```
+
+`prepare` configures Entire and project instructions and commits/pushes setup
+files. It does not make a model call. If a step fails, inspect the partially
+created project before trying again; do not delete it or blindly recreate it.
+
+### D. Write your brief before starting the workers
+
+When operating without this chat, you provide the scope and constraints yourself.
+Edit the example text below before running it. Keep secrets out of the brief.
+
+**Sprite — in the same terminal as the project variables above:**
+
+```sh
+cd "$project_dir" &&
+cat > PROJECT_BRIEF.md <<'BRIEF'
+# Gesture Jam — first version
+
+Build a small browser music toy for a beginner.
+
+Scope:
+- One octave of labeled piano keys with mouse and keyboard controls.
+- Optional MediaPipe hand tracking: point at a note zone and pinch to play.
+- Release before another note; show the active note.
+- A C–Am–F–G chord exercise that explains which notes form each chord.
+
+Constraints:
+- Process camera frames in the browser; no video upload or microphone capture.
+- Ask for camera access only after the user starts it.
+- No accounts, payments, recording, MIDI, or multiple instruments in this MVP.
+- Keep manual controls usable if camera access is denied.
+
+Acceptance:
+- Repeated notes stay responsive.
+- Held pinches do not retrigger continuously.
+- Stop releases camera and audio activity.
+- Labels remain usable on a narrow screen.
+- Document setup, behavior, limitations, and checks in tutorial.md.
+- Report separately what needs testing with a real hand and webcam.
+BRIEF
+```
+
+Immediately commit and push that one file before editing another:
+
+```sh
+git add -- PROJECT_BRIEF.md &&
+git commit -m "Document the initial project brief" &&
+git push
+```
+
+This manual commit records your brief in Git. Entire captures supported agent
+sessions; a shell command or hand-written file does not itself create an AI
+conversation transcript.
+
+### E. Run Glasstown and get the browser preview
+
+Return to the **Mac** with `exit`, or open a new Mac terminal. Update the local
+factory checkout only if it has no local changes:
+
+```sh
+cd /Users/rizelscarlett/Documents/work/software-factory
+git status --short
+```
+
+When clean:
+
+```sh
+git pull --ff-only
+```
+
+**Mac — start the new project's build:**
+
+```sh
+python3 codextown_client.py \
+  --sprite mcp-rizel-codextown \
+  --repo /home/sprite/projects/gesture-jam \
+  'Implement PROJECT_BRIEF.md. Run the acceptance checks and report any unverified behavior.'
+```
+
+The project path is on the Sprite, even though you run the client on the Mac.
+The runner uses the configured low-reasoning roles, tracking, tutorial stage,
+review, and preview. The client prints result links and opens Chrome after a
+successful review and ready preview. Keep this terminal open for the tunnel.
+Save the printed run ID.
+
+**Mac — an example follow-up on existing Airkeys:** this starts a new model run
+and changes the existing app, so run it only when you want that change.
+
+```sh
+python3 codextown_client.py \
+  --repo /home/sprite/projects/airkeys \
+  'Add a clearly labeled master volume slider. Preserve camera gestures, chord exercises, and existing controls. Update tests and tutorial.md.'
+```
+
+The default timeout is 300 seconds per role. For a deliberately longer bounded
+run, add `--timeout 600`; this changes the time allowance, not the model or
+reasoning setting. A failed or rejected run needs inspection and a specific
+follow-up task. There is no automatic repair conversation in this command.
+
+### F. Reopen a preview without running any models
+
+**Mac — from the factory directory:** substitute the actual saved run ID:
+
+```sh
+python3 codextown_client.py --open-run RUN_ID
+```
+
+To find recent IDs and statuses from the **Mac**:
+
+```sh
+sprite exec -s mcp-rizel-codextown --no-port-forward --no-stdin -- \
+  python3 /home/sprite/software-factory/codextown.py status
+```
+
+Reopening supports the 30 most recent saved runs. It may choose a different local
+port, so use the URL it prints. `Ctrl+C` closes that local connection; it does not
+remove the project or its preview service.
+
+### G. Open the Town Wall or forward a port yourself
+
+**Mac — terminal one:** connect to the existing dashboard service:
+
+```sh
+sprite proxy -s mcp-rizel-codextown 18080:8080
+```
+
+**Mac — terminal two:** open the local end in Chrome:
+
+```sh
+open -a 'Google Chrome' http://localhost:18080/
+```
+
+Here `18080:8080` means **local port 18080 → Sprite port 8080**. If the local port
+is occupied, choose another unused local port and change the URL accordingly.
+A proxy only forwards traffic: it does not create a server on the remote port.
+
+For an app already listening on Sprite port 3002, the equivalent is:
+
+```sh
+sprite proxy -s mcp-rizel-codextown 13002:3002
+```
+
+Then open `http://localhost:13002/` in a separate Mac terminal or Chrome. Use the
+actual remote port from the run's status; 3002 is only an example.
+
+### H. Inspect code and recorded sessions
+
+**Sprite — choose the project you want to inspect:**
+
+```sh
+cd /home/sprite/projects/airkeys
+git status --short
+git log -5 --format=full
+entire status
+entire checkpoint list --json --no-pager
+entire checkpoint explain --commit HEAD --no-pager
+```
+
+The last command needs a commit with captured checkpoint history. Local CLI help
+is the best syntax reference for the installed version:
+
+```sh
+entire checkpoint explain --help
+```
+
+For a failed factory run, look at its metadata and review artifacts under
+`~/.local/state/codextown/runs/RUN_ID/` inside the Sprite. These are operational
+files, not files to copy into the public factory repo. Inspect the reported
+failure before deciding what to fix or whether to increase a timeout.
+
+### I. Run a web page with no AI calls at all
+
+For a small manual static-site experiment, create a separate scratch directory.
+This example makes no GitHub repository and invokes neither Glasstown nor Codex.
+It therefore does not provide factory tracking, review, or tutorial generation.
+
+**Sprite:** choose an unused scratch directory and create a page:
+
+```sh
+mkdir /home/sprite/manual-web-demo &&
+cd /home/sprite/manual-web-demo &&
+printf '%s\n' '<!doctype html><title>My Sprite app</title><h1>Hello from my Sprite</h1>' > index.html
+```
+
+**Sprite — keep this server terminal open:**
+
+```sh
+python3 -m http.server 3100 --bind 0.0.0.0 --directory /home/sprite/manual-web-demo
+```
+
+**Mac — another terminal, keep the proxy open:**
+
+```sh
+sprite proxy -s mcp-rizel-codextown 13100:3100
+```
+
+**Mac — another terminal:**
+
+```sh
+open -a 'Google Chrome' http://localhost:13100/
+```
+
+Edit the page yourself and refresh Chrome. This basic Python server serves files
+in the chosen directory, so use a dedicated directory of browser-safe files,
+not a repository root containing Git metadata or credentials. `Ctrl+C` in the
+server terminal stops the server; `Ctrl+C` in the proxy terminal stops forwarding.
+
+### J. Create another Sprite when you actually need one
+
+**Mac — optional, creates another remote environment:**
+
+```sh
+sprite create -o rizel-scarlett-105 my-new-sprite
+sprite console -o rizel-scarlett-105 -s my-new-sprite --no-port-forward
+```
+
+Choose an unused name and stay within your configured capacity. The manual
+static-site example can be used there by changing `--sprite`/`-s` in its Mac
+commands. Creating the Sprite alone does **not** install this factory or transfer
+its authenticated sessions.
+
+For a new Glasstown environment, you still need the factory checkout at
+`/home/sprite/software-factory`, its configured Codex runtime, Entire, Git author
+identity, and working Codex/GitHub logins. Follow the setup sections in the
+[factory README](README.md) and the
+[Entire installation guide](https://docs.entire.io/installation), then perform
+the preflight checks above. Once configured, pass `--sprite my-new-sprite` to the
+Mac client. The cookbook's default path uses the already-configured Sprite.
+
+Command syntax here was checked against the installed Sprites CLI, remote Entire
+and GitHub CLI help, and the factory's client/runner arguments. For additional
+Sprite operations, see [Working with Sprites](https://docs.sprites.dev/working-with-sprites/).
+These examples were documented without launching another product build or
+creating another Sprite.
+
 ## Reference points
 
 - [Factory README](README.md), [agent instructions](AGENTS.md), and
