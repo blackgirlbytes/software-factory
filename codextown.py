@@ -157,7 +157,7 @@ def run_task(args):
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise RuntimeError('Another Codextown run is using this repository.')
+            raise RuntimeError('Another Glasstown run is using this repository.')
         tracking = prepare_project(repo)
         run_id = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:6]
         directory = state / 'runs' / run_id
@@ -269,7 +269,7 @@ def serve(args):
         def log_message(self, *_):
             pass
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f'Codextown status page on {args.host}:{args.port}', flush=True)
+    print(f'Glasstown status page on {args.host}:{args.port}', flush=True)
     server.serve_forever()
 
 
