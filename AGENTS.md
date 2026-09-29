@@ -1,5 +1,22 @@
 # Agent instructions
 
+## Factory entry point
+
+When the user describes an app or product to build in this repository, use the
+[Glasstown skill](.agents/skills/glasstown/SKILL.md), even if they do not name it.
+Read that file before planning or creating the project. This repository is the
+factory control plane; new products belong in their own Sprite project folders
+and GitHub repositories. Requests to change the factory itself stay in this repo.
+
+The standard workflow is: discuss the plan and constraints with the user, then
+create a separate private project/repo for a new product (reuse the named project
+for follow-up work), run low-reasoning workers with Entire tracking and per-file
+commit/push, open the approved web preview in Chrome, and return GitHub and Entire
+links. The user should not need to repeat these defaults. Honor explicit overrides
+and previously accepted plans; the skill contains the concrete setup and delivery
+steps. Do not start a new product build before the planning conversation is settled
+unless the user explicitly asks to proceed without it.
+
 ## Repository changes
 
 - Immediately commit and push each file change before changing another file.
