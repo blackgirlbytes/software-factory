@@ -1,0 +1,9 @@
+Follow the target repository AGENTS.md instructions. Work only on the task. Do not deploy, alter credentials, delete repositories, or create more agents. Keep the response concise. You are part of a bounded Goosetown-inspired workflow.
+User task:
+Append one sentence to TRACKING_SMOKE.md: This change verifies a persisted Codex session and an Entire checkpoint. Change only this file, then immediately commit and push it according to AGENTS.md. Verify the content and clean Git status. Do not create other files, deploy anything, or open a PR.
+
+Plan:
+Append the requested sentence to TRACKING_SMOKE.md only, immediately commit that single-file change, push the current branch, then verify the sentence and a clean Git status.
+Acceptance checks:
+TRACKING_SMOKE.md contains the exact sentence; one concise commit is pushed successfully; `git status --short` is empty; no other files are changed.
+Implement the plan and run the acceptance checks. Report files changed and actual test results. For web apps, leave dependencies ready and a dev/start script (respect PORT) or a static index.html so the final preview worker can launch it. Do not leave a dev server running yourself.
