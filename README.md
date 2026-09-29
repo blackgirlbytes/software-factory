@@ -40,7 +40,27 @@ The dashboard URL retains Sprite authentication. If using the Sprites CLI,
 `sprite proxy -s mcp-rizel-codextown 8080` provides local browser access after
 signing in to the same organization.
 
-## Give a task and open the finished app in Chrome
+## Start with an idea
+
+Open a new Codex chat **in this repository** and describe the product:
+
+> I want to build a habit tracker with weekly progress charts.
+
+`AGENTS.md` automatically routes product requests to the repository's
+[Glasstown skill](.agents/skills/glasstown/SKILL.md). The chat discusses your plan
+and constraints first. Once you accept the plan, it handles a separate Sprite
+project folder and private GitHub repo, low-reasoning workers, Entire tracking,
+per-file commits and pushes, the Chrome preview, and GitHub/Entire result links.
+You do not need to request these defaults individually. Explicit preferences
+override them; follow-up work stays in the existing project's folder and repo.
+
+This is an agent workflow backed by the skill and factory tools. The direct CLI
+below starts at the implementation stage and expects a prepared project; it does
+not conduct the planning conversation or create the GitHub repo itself. The
+default workflow reuses the configured Sprite and working logins. A fresh Sprite
+or expired authentication still needs setup.
+
+## Direct CLI: give a task and open the finished app in Chrome
 
 Run this **on your Mac**, from your local checkout of this repository:
 
