@@ -1,4 +1,4 @@
-"""Prepare Entire tracking and per-file delivery for each Codextown project."""
+"""Prepare Entire tracking and per-file delivery for each Glasstown project."""
 from functools import lru_cache
 import hashlib
 import json
@@ -11,7 +11,7 @@ import tempfile
 
 BEGIN = '<!-- codextown:tracking -->'
 END = '<!-- /codextown:tracking -->'
-INSTRUCTIONS = '''## Codextown history and commits
+INSTRUCTIONS = '''## Glasstown history and commits
 
 - Entire records this project's Codex sessions and links them to Git commits.
 - Immediately after creating, modifying, renaming, or deleting ONE file, commit
@@ -48,7 +48,7 @@ def json_text(value):
 @lru_cache(maxsize=1)
 def entire_template():
     if not shutil.which('entire'):
-        raise RuntimeError('Install Entire inside this Sprite before running Codextown.')
+        raise RuntimeError('Install Entire inside this Sprite before running Glasstown.')
     # Have the installed CLI generate its own configuration away from the target.
     # Then publish target files one at a time, honoring the per-file push rule.
     with tempfile.TemporaryDirectory(prefix='codextown-entire-') as tmp:
@@ -64,7 +64,7 @@ def instructions(existing):
     block = BEGIN + '\n' + INSTRUCTIONS + END
     if BEGIN in existing:
         if existing.count(BEGIN) != 1 or existing.count(END) != 1:
-            raise RuntimeError('Malformed Codextown tracking block in AGENTS.md.')
+            raise RuntimeError('Malformed Glasstown tracking block in AGENTS.md.')
         return re.sub(re.escape(BEGIN) + '.*?' + re.escape(END), lambda _: block,
                       existing, flags=re.S)
     return existing.rstrip() + ('\n\n' if existing.strip() else '') + block + '\n'
@@ -81,7 +81,7 @@ def commit_file(repo, name, content, remote, branch):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
     git(repo, 'add', '--', name)
-    git(repo, 'commit', '-m', 'Configure Codextown tracking: ' + name)
+    git(repo, 'commit', '-m', 'Configure Glasstown tracking: ' + name)
     # On failure, leave this commit intact and stop before touching another file.
     git(repo, 'push', '-u', remote, 'HEAD:refs/heads/' + branch)
 
