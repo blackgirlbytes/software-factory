@@ -1,9 +1,12 @@
-# Codextown on Sprites
+# Glasstown on Sprites
 
 A small Codex adaptation of [Goosetown](https://github.com/aaif-goose/goosetown):
 one planner, one worker, one reviewer, a final preview worker, and a live Town Wall
 inside a persistent Sprite. This is an initial implementation of that workflow, not a complete port
 of Goosetown's Goose extensions or dashboard.
+
+Glasstown captures Codex sessions with Entire and links them to the code changes.
+Existing `codextown` command names, service names, and state paths remain compatible.
 
 ## Cost defaults
 
@@ -39,7 +42,7 @@ python3 codextown_client.py --repo /home/sprite/projects/my-project \
 ```
 
 The project path is inside the Sprite and must already be a clean Git repository.
-The client sends your task to Codextown, streams progress, and waits for a passed
+The client sends your task to Glasstown, streams progress, and waits for a passed
 review. The preview worker starts the app and checks its HTTP response. The client
 then connects a private local port and opens **Google Chrome** automatically.
 It picks an unused local port, so an existing localhost:3000 app is unaffected.
@@ -127,13 +130,13 @@ prevents a new run from silently building over uncommitted work.
 
 ## Entire history for every project
 
-Every project submitted to Codextown is prepared automatically before any model
+Every project submitted to Glasstown is prepared automatically before any model
 calls. This also works for an empty Git repository with a configured remote.
 Setup requires Entire on the Sprite, a Git author identity, a push remote (the
 branch's remote, or `origin`), and working Git authentication. The current Sprite
 has Entire 0.11.3 and GitHub authentication configured.
 
-Codextown preserves existing project instructions and adds a managed `AGENTS.md`
+Glasstown preserves existing project instructions and adds a managed `AGENTS.md`
 section requiring **one file change → commit → push → next file**. It installs
 Entire's generated Codex hooks, enables automatic commit linking and session
 sync, and keeps logs and machine-local settings ignored. Setup itself commits
@@ -147,7 +150,7 @@ model and reasoning flags remain fixed. The worker gets write access to the
 project's Git metadata and network access for pushes; planner and reviewer stay
 read-only. A final push syncs session records after review finishes.
 
-Before review, Codextown checks that the worker left a clean tree, pushed its
+Before review, Glasstown checks that the worker left a clean tree, pushed its
 commits, changed only one file per commit, and attached an `Entire-Checkpoint`
 trailer to each new commit. Failures stop the run before preview. Read-only roles
 retain Codex transcripts; source-changing commits are what create Entire's
@@ -172,7 +175,7 @@ git log -5 --format=full
 For a new Sprite, install Entire using its [official installation guide](https://docs.entire.io/installation),
 sign in with `gh auth login` and `gh auth setup-git`, and configure your Git name
 and email. Projects must have a remote you can push to. No credentials are copied
-into project files. Tracking is configured per project when Codextown prepares it;
+into project files. Tracking is configured per project when Glasstown prepares it;
 unrelated repositories elsewhere in the Sprite are not modified.
 
 ```sh
