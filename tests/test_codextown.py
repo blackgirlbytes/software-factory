@@ -48,6 +48,22 @@ class TownTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'agent error'):
                     town.invoke(p, 'worker', 'task', p, 1)
 
+    def test_nested_runtime_error_is_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            events = [{'type': 'item.completed', 'item': {'type': 'error',
+                       'message': 'Code Mode host missing'}}, {'type': 'turn.completed'}]
+            with patch.object(town.subprocess, 'Popen', self.fake_process(events, p/'worker.txt')):
+                with self.assertRaisesRegex(RuntimeError, 'agent error'):
+                    town.invoke(p, 'worker', 'task', p, 1)
+
+    def test_explicit_runtime_keeps_model_and_effort(self):
+        with patch.object(town, 'CODEX_BIN', '/opt/complete-codex/bin/codex'):
+            cmd = town.command(Path('/work'), 'worker', Path('/state/out'))
+        self.assertEqual(cmd[0], '/opt/complete-codex/bin/codex')
+        self.assertEqual(cmd[cmd.index('-m') + 1], 'gpt-5.6-luna')
+        self.assertIn('model_reasoning_effort="low"', cmd)
+
     def test_timeout_terminates_process_group(self):
         with tempfile.TemporaryDirectory() as tmp:
             proc = Mock(pid=12345)
