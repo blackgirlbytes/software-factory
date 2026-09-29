@@ -11,8 +11,8 @@ and GitHub repositories. Requests to change the factory itself stay in this repo
 The standard workflow is: discuss the plan and constraints with the user, then
 create a separate private project/repo for a new product (reuse the named project
 for follow-up work), run low-reasoning workers with Entire tracking and per-file
-commit/push, open the approved web preview in Chrome, and return GitHub and Entire
-links. The user should not need to repeat these defaults. Honor explicit overrides
+commit/push, write and review `tutorial.md` in the project repo, open the approved web preview in Chrome, and return GitHub and Entire
+links plus the tutorial link. The user should not need to repeat these defaults. Honor explicit overrides
 and previously accepted plans; the skill contains the concrete setup and delivery
 steps. Do not start a new product build before the planning conversation is settled
 unless the user explicitly asks to proceed without it.
