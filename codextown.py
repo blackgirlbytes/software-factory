@@ -14,11 +14,13 @@ import sys
 import time
 import uuid
 
+from preview import start_preview
+
 MODEL = 'gpt-5.6-luna'
 EFFORT = 'low'
 CODEX_BIN = os.environ.get('CODEXTOWN_CODEX', 'codex')
 DEFAULT_STATE = Path.home() / '.local/state/codextown'
-ROLES = ('planner', 'worker', 'reviewer')
+ROLES = ('planner', 'worker', 'reviewer', 'preview')
 PLAN_SCHEMA = {'type': 'object', 'additionalProperties': False,
     'properties': {'plan': {'type': 'string'}, 'acceptance': {'type': 'string'}},
     'required': ['plan', 'acceptance']}
@@ -49,7 +51,7 @@ def boot_id():
 
 def public_run(run):
     keys = ('id', 'task', 'model', 'reasoning', 'created', 'updated', 'status',
-            'phase', 'roles', 'wall')
+            'phase', 'roles', 'wall', 'preview')
     result = {k: run[k] for k in keys if k in run}
     if result.get('status') == 'running':
         try:
@@ -175,7 +177,7 @@ def run_task(args):
                    'Do not deploy, alter credentials, delete repositories, or create more agents. '
                    'Keep the response concise. You are part of a bounded Goosetown-inspired workflow.\n'
                    'User task:\n' + args.task + '\n')
-        post('town', 'Run created; three roles, low reasoning, no automatic retries.')
+        post('town', 'Run created; three model roles, then app preview. Low reasoning, no automatic retries.')
         try:
             plan = json.loads(agent('planner', context +
                 'Inspect the repository read-only. Produce a small implementation plan and concrete acceptance checks.', PLAN_SCHEMA))
@@ -184,17 +186,43 @@ def run_task(args):
             post('planner', 'Implementation plan ready')
             worker = agent('worker', context + '\nPlan:\n' + plan['plan'][:16000] +
                 '\nAcceptance checks:\n' + plan['acceptance'][:8000] +
-                '\nImplement the plan and run the acceptance checks. Report files changed and actual test results.')
+                '\nImplement the plan and run the acceptance checks. Report files changed and actual test results. '
+                'For web apps, leave dependencies ready and a dev/start script (respect PORT) or a static index.html '
+                'so the final preview worker can launch it. Do not leave a dev server running yourself.')
             review = json.loads(agent('reviewer', context + '\nPlan:\n' + json.dumps(plan)[:24000] +
                 '\nWorker report (verify it independently):\n' + worker[:12000] +
                 '\nReview the changed files and git diff read-only. Check correctness and test evidence. '
                 'Approve only if the task and acceptance checks are satisfied.', REVIEW_SCHEMA))
             if type(review.get('approved')) is not bool or not isinstance(review.get('summary'), str):
                 raise RuntimeError('Reviewer returned an invalid verdict.')
-            run['status'] = 'approved' if review['approved'] else 'needs_changes'
             save(directory / 'review.json', review)
             post('town', 'Review approved' if review['approved'] else 'Review requested changes; run stopped.')
+            run['status'] = 'approved' if review['approved'] else 'needs_changes'
+            run['roles']['preview']['status'] = 'skipped'
+            if review['approved'] and not getattr(args, 'no_preview', False):
+                run['status'] = 'running'
+                run['phase'] = 'preview'
+                run['roles']['preview'] = {'status': 'running', 'started': now()}
+                post('preview', 'Starting the app and checking its HTTP response')
+                try:
+                    run['preview'] = start_preview(repo, directory,
+                        getattr(args, 'preview_command', None), getattr(args, 'preview_port', None))
+                    ready = run['preview']['status'] == 'ready'
+                    run['roles']['preview'].update(status='complete' if ready else 'skipped', finished=now())
+                    run['status'] = 'approved'
+                    post('preview', 'App ready on port ' + str(run['preview']['port']) if ready
+                         else run['preview']['message'])
+                except Exception as exc:
+                    (directory/'preview-error.txt').write_text(str(exc))
+                    run['preview'] = {'status': 'failed'}
+                    run['status'] = 'preview_failed'
+                    run['roles']['preview'].update(status='failed', finished=now())
+                    post('preview', 'Code review passed, but preview failed. Inspect preview-error.txt and preview.log.')
+            save(directory / 'run.json', run)
             print(f'Artifacts: {directory}', flush=True)
+            print('CODEXTOWN_RESULT ' + json.dumps(public_run(run)), flush=True)
+            if run['status'] == 'preview_failed':
+                return 3
             return 0 if review['approved'] else 2
         except (Exception, KeyboardInterrupt) as exc:
             run['status'] = 'interrupted' if isinstance(exc, KeyboardInterrupt) else 'failed'
@@ -241,6 +269,9 @@ def main():
     run = sub.add_parser('run', help='Run one bounded plan/build/review workflow')
     run.add_argument('--repo', type=Path, required=True)
     run.add_argument('--timeout', type=int, default=300, help='Seconds per role, default 300')
+    run.add_argument('--no-preview', action='store_true', help='Skip the final app preview')
+    run.add_argument('--preview-command', help='Custom server command; PORT and HOST are supplied')
+    run.add_argument('--preview-port', type=int, help='Server port; defaults to a free port from 3000–3099')
     run.add_argument('task')
     web = sub.add_parser('serve', help='Serve a read-only status page behind Sprite authentication')
     web.add_argument('--host', default='127.0.0.1')
