@@ -63,7 +63,7 @@ class TutorialTests(unittest.TestCase):
         self.assertEqual(cmd[cmd.index('-m') + 1], 'gpt-5.6-luna')
         self.assertIn('model_reasoning_effort="low"', cmd)
         self.assertIn('sandbox_workspace_write.network_access=true', cmd)
-        self.assertIn(str(self.repo/'.git'), cmd)
+        self.assertIn(str((self.repo/'.git').resolve()), cmd)
 
     def test_client_prints_tutorial_link(self):
         stream = io.StringIO()
