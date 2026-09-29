@@ -112,8 +112,14 @@ def invoke(repo, role, prompt, directory, timeout, schema=None, on_event=None):
             records.append(json.loads(line))
         except ValueError:
             continue
-    if any(e.get('type') in ('error', 'turn.failed')
-           or e.get('item', {}).get('type') == 'error' for e in records):
+    # Codex 0.151 also emits a harmless skill-budget notice as an error item.
+    def is_error(event):
+        item = event.get('item', {})
+        notice = item.get('message', '').startswith(
+            'Skill descriptions were shortened to fit the skills context budget.')
+        return (event.get('type') in ('error', 'turn.failed')
+                or (item.get('type') == 'error' and not notice))
+    if any(is_error(e) for e in records):
         raise RuntimeError(f'{role} reported an agent error; inspect {role}.jsonl')
     completed = [e for e in records if e.get('type') == 'turn.completed']
     if not completed or not output.exists() or not output.read_text().strip():
