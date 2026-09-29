@@ -119,6 +119,30 @@ class TrackingTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'missing an Entire checkpoint'):
                 tracking.verify_delivery(self.repo, meta)
 
+    def test_multiple_files_in_one_worker_commit_stops_delivery(self):
+        meta = {'base_commit':'base','remote':'origin','branch':'main'}
+        values = ['', 'head', 'head\trefs/heads/main', 'head',
+                  'Change\nEntire-Checkpoint: abc123', 'A\0one.txt\0A\0two.txt\0']
+        with patch.object(tracking, 'git', side_effect=values):
+            with self.assertRaisesRegex(RuntimeError, 'exactly one file'):
+                tracking.verify_delivery(self.repo, meta)
+
+    def test_profile_holds_only_verified_approvals_and_preserves_user_config(self):
+        config = self.root/'codex-config'
+        config.mkdir()
+        existing = config/'config.toml'
+        existing.write_text('model = "another-model"\n')
+        flags = ['-c', 'features.hooks=true', '-c', 'hooks.state."safe".trusted_hash="sha256:abc"']
+        with patch.dict(tracking.os.environ, {'CODEX_HOME':str(config)}), \
+             patch.object(tracking, 'hook_overrides', return_value=flags):
+            result = tracking.hook_profile(self.repo)
+            first = (config/(result[1]+'.config.toml')).read_text()
+            self.assertEqual(tracking.hook_profile(self.repo), result)
+        self.assertEqual(result[0], '--profile')
+        self.assertIn('sha256:abc', first)
+        self.assertNotIn('model =', first)
+        self.assertEqual(existing.read_text(), 'model = "another-model"\n')
+
 
 if __name__ == '__main__':
     unittest.main()
