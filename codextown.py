@@ -16,6 +16,7 @@ import uuid
 
 MODEL = 'gpt-5.6-luna'
 EFFORT = 'low'
+CODEX_BIN = os.environ.get('CODEXTOWN_CODEX', 'codex')
 DEFAULT_STATE = Path.home() / '.local/state/codextown'
 ROLES = ('planner', 'worker', 'reviewer')
 PLAN_SCHEMA = {'type': 'object', 'additionalProperties': False,
@@ -71,7 +72,7 @@ def snapshot(state):
 
 
 def command(repo, role, output, schema=None):
-    cmd = ['codex', '-a', 'never', 'exec', '--ignore-user-config', '--ephemeral',
+    cmd = [CODEX_BIN, '-a', 'never', 'exec', '--ignore-user-config', '--ephemeral',
            '-m', MODEL, '-c', 'model_reasoning_effort="low"',
            '-c', 'service_tier="default"',
            '-s', 'workspace-write' if role == 'worker' else 'read-only',
@@ -111,7 +112,8 @@ def invoke(repo, role, prompt, directory, timeout, schema=None, on_event=None):
             records.append(json.loads(line))
         except ValueError:
             continue
-    if any(e.get('type') in ('error', 'turn.failed') for e in records):
+    if any(e.get('type') in ('error', 'turn.failed')
+           or e.get('item', {}).get('type') == 'error' for e in records):
         raise RuntimeError(f'{role} reported an agent error; inspect {role}.jsonl')
     completed = [e for e in records if e.get('type') == 'turn.completed']
     if not completed or not output.exists() or not output.read_text().strip():
@@ -130,7 +132,7 @@ def run_task(args):
     state = args.state.resolve()
     if state == repo or repo in state.parents:
         raise RuntimeError('State directory must be outside the target repository.')
-    auth = subprocess.run(['codex', 'login', 'status'], capture_output=True, text=True)
+    auth = subprocess.run([CODEX_BIN, 'login', 'status'], capture_output=True, text=True)
     if auth.returncode:
         raise RuntimeError('Codex is not signed in. Run codex login --device-auth inside the Sprite.')
     lock_dir = DEFAULT_STATE / 'locks'
