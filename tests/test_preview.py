@@ -89,6 +89,9 @@ class PreviewTests(unittest.TestCase):
         outputs = ['{"plan":"Build","acceptance":"Test"}', 'Built',
                    json.dumps({'approved': approved, 'summary': 'Reviewed'})]
         with patch.object(town, 'DEFAULT_STATE', self.root/'locks'), \
+             patch.object(town, 'prepare_project', create=True, return_value={'base_commit':'abc','remote':'origin','branch':'main'}), \
+             patch.object(town, 'verify_delivery', create=True), \
+             patch.object(town, 'finish_tracking', create=True), \
              patch.object(town.subprocess, 'check_output', side_effect=[str(self.repo)+'\n', b'']), \
              patch.object(town.subprocess, 'run', return_value=SimpleNamespace(returncode=0)), \
              patch.object(town, 'invoke', side_effect=outputs), \
