@@ -89,6 +89,9 @@ class TownTests(unittest.TestCase):
         repo = root/'repo'; repo.mkdir()
         args=SimpleNamespace(repo=repo,state=root/'state',task='Build a tiny helper',timeout=30)
         with patch.object(town,'DEFAULT_STATE',root/'locks-root'), \
+             patch.object(town,'prepare_project',create=True,return_value={'base_commit':'abc','remote':'origin','branch':'main'}), \
+             patch.object(town,'verify_delivery',create=True), \
+             patch.object(town,'finish_tracking',create=True), \
              patch.object(town.subprocess,'check_output',side_effect=[str(repo)+'\n',b'']), \
              patch.object(town.subprocess,'run',return_value=SimpleNamespace(returncode=0)), \
              patch.object(town,'invoke',side_effect=responses) as invoke:
