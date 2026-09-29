@@ -41,6 +41,8 @@ Explicit user choices override these defaults.
   roles. No silent model upgrades, higher reasoning, or unbounded retries.
 - Enable Entire before any product worker runs, retain its hooks and transcripts,
   and commit then push **each individual file change** before the next file.
+- Have the tutorial writer create/update and push `tutorial.md` from the actual
+  implementation before final review. Return its GitHub link with the results.
 - For a web app, run the final preview, connect its private local tunnel, and
   open **Google Chrome**. Always return the GitHub and Entire links when available.
 - Preserve existing projects, running previews, credentials, and unrelated work.
@@ -95,7 +97,7 @@ factory checkout inside the Sprite. Legacy `codextown` filenames are intentional
   prompt text as a safely quoted argument; do not interpolate unescaped user
   text into shell code. Do not ask the user to run this command themselves.
 - The runner prepares tracking, plans, builds, verifies pushed commits and Entire
-  trailers, reviews, syncs sessions, and starts an approved app's preview. The Mac
+  trailers, writes and pushes `tutorial.md`, reviews both code and tutorial, syncs sessions, and starts an approved app's preview. The Mac
   client connects the tunnel and opens Chrome. Running only the remote runner
   does not complete the browser-opening part of delivery.
 - Keep the client/tunnel process alive after Chrome opens. Report its actual
@@ -106,7 +108,7 @@ factory checkout inside the Sprite. Legacy `codextown` filenames are intentional
   ready unless the preview health check passed. Respect the user's authorization
   when deciding the next bounded repair task; never silently increase cost.
 - Return a concise result with **app preview**, **GitHub project/commit**, and
-  **Entire sessions** links from the run's `links` metadata. Those GitHub/Entire
+  **Entire sessions**, and **tutorial** links from the run's `links` metadata. Those GitHub/Entire
   links should still be returned for a skipped or failed web preview when present.
   Non-web projects get artifact locations instead of a forced web server. Entire
   may require sign-in/repo access or time to ingest a new checkpoint.
