@@ -15,6 +15,7 @@ import time
 import uuid
 
 from preview import start_preview
+from tracking import prepare_project, hook_overrides, worker_git_dirs, verify_delivery, finish_tracking
 
 MODEL = 'gpt-5.6-luna'
 EFFORT = 'low'
@@ -74,11 +75,17 @@ def snapshot(state):
 
 
 def command(repo, role, output, schema=None):
-    cmd = [CODEX_BIN, '-a', 'never', 'exec', '--ignore-user-config', '--ephemeral',
+    cmd = [CODEX_BIN, '-a', 'never', 'exec', '--ignore-user-config',
            '-m', MODEL, '-c', 'model_reasoning_effort="low"',
            '-c', 'service_tier="default"',
            '-s', 'workspace-write' if role == 'worker' else 'read-only',
            '-C', str(repo), '--json', '-o', str(output)]
+    cmd += hook_overrides(repo)
+    if role == 'worker':
+        # The worker is explicitly required to create and push Git commits.
+        cmd += ['-c', 'sandbox_workspace_write.network_access=true']
+        for directory in worker_git_dirs(repo):
+            cmd += ['--add-dir', directory]
     if schema:
         cmd += ['--output-schema', str(schema)]
     return cmd + ['-']
@@ -151,6 +158,7 @@ def run_task(args):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RuntimeError('Another Codextown run is using this repository.')
+        tracking = prepare_project(repo)
         run_id = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:6]
         directory = state / 'runs' / run_id
         directory.mkdir(parents=True, mode=0o700)
@@ -158,6 +166,7 @@ def run_task(args):
                'created': now(), 'updated': now(), 'status': 'running', 'phase': 'planner',
                'pid': os.getpid(), 'boot_id': boot_id(), 'repository': str(repo),
                'roles': {r: {'status': 'waiting'} for r in ROLES}, 'wall': []}
+        run['tracking'] = tracking
         def post(role, message):
             run['updated'] = now()
             run['wall'].append({'time': now(), 'role': role, 'message': message})
@@ -189,12 +198,15 @@ def run_task(args):
                 '\nImplement the plan and run the acceptance checks. Report files changed and actual test results. '
                 'For web apps, leave dependencies ready and a dev/start script (respect PORT) or a static index.html '
                 'so the final preview worker can launch it. Do not leave a dev server running yourself.')
+            verify_delivery(repo, tracking)
             review = json.loads(agent('reviewer', context + '\nPlan:\n' + json.dumps(plan)[:24000] +
                 '\nWorker report (verify it independently):\n' + worker[:12000] +
-                '\nReview the changed files and git diff read-only. Check correctness and test evidence. '
+                '\nReview the committed changes with git diff ' + tracking['base_commit'] +
+                '..HEAD, plus the working tree, read-only. Check correctness and test evidence. '
                 'Approve only if the task and acceptance checks are satisfied.', REVIEW_SCHEMA))
             if type(review.get('approved')) is not bool or not isinstance(review.get('summary'), str):
                 raise RuntimeError('Reviewer returned an invalid verdict.')
+            finish_tracking(repo, tracking)
             save(directory / 'review.json', review)
             post('town', 'Review approved' if review['approved'] else 'Review requested changes; run stopped.')
             run['status'] = 'approved' if review['approved'] else 'needs_changes'
@@ -273,6 +285,8 @@ def main():
     run.add_argument('--preview-command', help='Custom server command; PORT and HOST are supplied')
     run.add_argument('--preview-port', type=int, help='Server port; defaults to a free port from 3000–3099')
     run.add_argument('task')
+    setup = sub.add_parser('prepare', help='Enable Entire and per-file commit/push instructions for a project')
+    setup.add_argument('--repo', type=Path, required=True)
     web = sub.add_parser('serve', help='Serve a read-only status page behind Sprite authentication')
     web.add_argument('--host', default='127.0.0.1')
     web.add_argument('--port', type=int, default=8080)
@@ -282,6 +296,9 @@ def main():
         if not 1 <= args.timeout <= 1800:
             parser.error('--timeout must be between 1 and 1800 seconds')
         return run_task(args)
+    if args.action == 'prepare':
+        print(json.dumps(prepare_project(args.repo.resolve()), indent=2))
+        return 0
     if args.action == 'serve':
         serve(args)
     else:
