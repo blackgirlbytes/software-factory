@@ -15,7 +15,7 @@ import time
 import uuid
 
 from preview import start_preview
-from tracking import prepare_project, hook_profile, worker_git_dirs, verify_delivery, finish_tracking
+from tracking import prepare_project, hook_profile, worker_git_dirs, verify_delivery, finish_tracking, result_links
 
 MODEL = 'gpt-5.6-luna'
 EFFORT = 'low'
@@ -52,7 +52,7 @@ def boot_id():
 
 def public_run(run):
     keys = ('id', 'task', 'model', 'reasoning', 'created', 'updated', 'status',
-            'phase', 'roles', 'wall', 'preview')
+            'phase', 'roles', 'wall', 'preview', 'links')
     result = {k: run[k] for k in keys if k in run}
     if result.get('status') == 'running':
         try:
@@ -207,6 +207,10 @@ def run_task(args):
             if type(review.get('approved')) is not bool or not isinstance(review.get('summary'), str):
                 raise RuntimeError('Reviewer returned an invalid verdict.')
             finish_tracking(repo, tracking)
+            try:
+                run['links'] = result_links(repo, tracking)
+            except (RuntimeError, OSError, ValueError):
+                post('town', 'Project links unavailable; code and session sync completed.')
             save(directory / 'review.json', review)
             post('town', 'Review approved' if review['approved'] else 'Review requested changes; run stopped.')
             run['status'] = 'approved' if review['approved'] else 'needs_changes'
