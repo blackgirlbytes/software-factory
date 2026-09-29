@@ -1,8 +1,8 @@
 # Codextown on Sprites
 
 A small Codex adaptation of [Goosetown](https://github.com/aaif-goose/goosetown):
-one planner, one worker, one reviewer, and a live Town Wall inside a persistent
-Sprite. This is an initial implementation of that workflow, not a complete port
+one planner, one worker, one reviewer, a final preview worker, and a live Town Wall
+inside a persistent Sprite. This is an initial implementation of that workflow, not a complete port
 of Goosetown's Goose extensions or dashboard.
 
 ## Cost defaults
@@ -14,6 +14,7 @@ credentials. There is no automatic model upgrade, retry loop, or repair loop.
 One run makes at most three agent calls, each limited to five minutes by default.
 Timeouts bound duration, not dollar spend. Account usage and billing depend on
 how Codex is authenticated.
+The fourth, preview worker uses ordinary code and makes no additional model call.
 
 ## Current environment
 
@@ -27,6 +28,68 @@ Sprites MCP manages the environment. Codex runs locally inside that environment.
 The dashboard URL retains Sprite authentication. If using the Sprites CLI,
 `sprite proxy -s mcp-rizel-codextown 8080` provides local browser access after
 signing in to the same organization.
+
+## Give a task and open the finished app in Chrome
+
+Run this **on your Mac**, from your local checkout of this repository:
+
+```sh
+python3 codextown_client.py --repo /home/sprite/projects/my-project \
+  "Build a small web app and run its tests"
+```
+
+The project path is inside the Sprite and must already be a clean Git repository.
+The client sends your task to Codextown, streams progress, and waits for a passed
+review. The preview worker starts the app and checks its HTTP response. The client
+then connects a private local port and opens **Google Chrome** automatically.
+It picks an unused local port, so an existing localhost:3000 app is unaffected.
+Keep that terminal open while viewing the app; Ctrl+C closes the local connection.
+On other desktop platforms, the client opens the default browser.
+
+The Sprites CLI must be installed and signed in on that computer (`sprite login`).
+This is separate from Codex's login inside the Sprite. Both are already set up on
+the current Mac/Sprite. The client also looks for `~/.local/bin/sprite` when it is
+not on PATH. Use `--sprite NAME` or `--org NAME` to select another environment.
+
+Reopen an existing preview without rerunning any agents:
+
+```sh
+python3 codextown_client.py --open-run RUN_ID
+```
+
+The client prints the run ID and preview URL. Reopening supports the 30 most recent
+runs. It starts that run's Sprite service again if necessary; a later modification
+to the same project will also change what that preview serves.
+
+### What the preview worker supports
+
+- Node projects with a `dev` or `start` script. Next.js and Vite get explicit
+  loopback host/port flags; other scripts should honor `PORT` and `HOST`.
+- Static sites with `dist/index.html` or a root `index.html`. The built-in server
+  blocks hidden files, directory listings, and symlinks outside the served folder.
+- Custom servers with `--preview-command`, for example
+  `--preview-command 'python3 app.py' --preview-port 5000`. Commands run in the
+  target project with `PORT` and `HOST` set. The app must listen on that port.
+
+The worker has 60 seconds to receive a successful HTTP response after starting
+the server. This is a readiness check, not a visual or interaction test. A failed
+review never starts a preview. A preview failure stops with exit 3 and retains
+the successful code review; inspect `preview-error.txt`, `preview.log`, and the
+Sprite service logs. Non-web tasks skip preview. Use `--no-preview` with the
+inside-Sprite runner to disable this step explicitly.
+
+Each successful run leaves a named `codextown-preview-RUN_ID` Sprite service.
+The dashboard shows its preview port; its existing private URL still serves the
+town board. No public URL setting changes. To retire a preview, run inside the
+Sprite:
+
+```sh
+sprite-env services stop codextown-preview-RUN_ID
+sprite-env services delete codextown-preview-RUN_ID
+```
+
+Use the lowercase run ID for the service name. Logs are under
+`/.sprite/logs/services/codextown-preview-RUN_ID.log`.
 
 ## Run a task inside the Sprite
 
