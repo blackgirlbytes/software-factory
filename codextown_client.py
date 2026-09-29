@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Codextown in a Sprite, then open its private app preview locally."""
+"""Run Glasstown in a Sprite, then open its private app preview locally."""
 import argparse
 import json
 from pathlib import Path
@@ -49,7 +49,7 @@ def submit(args):
     if code:
         if result:
             print('Run ' + result['id'] + ': ' + result['status'])
-        raise RuntimeError(f'Codextown stopped (exit {code}); no browser was opened.')
+        raise RuntimeError(f'Glasstown stopped (exit {code}); no browser was opened.')
     if result is None:
         raise RuntimeError('Remote runner returned no result. Update the Sprite checkout first.')
     return result
