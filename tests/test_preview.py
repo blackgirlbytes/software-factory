@@ -49,6 +49,7 @@ class PreviewTests(unittest.TestCase):
     def test_static_app_serves_content_but_not_secrets_or_directory_listing(self):
         (self.repo/'index.html').write_text('<h1>Preview works</h1>')
         (self.repo/'.env').write_text('PRIVATE=not-for-browser')
+        (self.repo/'env-alias.txt').symlink_to(self.repo/'.env')
         (self.repo/'empty').mkdir()
         secret = self.root/'outside.txt'
         secret.write_text('private')
@@ -59,7 +60,7 @@ class PreviewTests(unittest.TestCase):
         self.addCleanup(preview.LOCAL_SERVERS[result['pid']].wait)
         self.addCleanup(os.killpg, result['pid'], signal.SIGTERM)
         for path, expected in [('/', 200), ('/.env', 404), ('/%2eenv', 404),
-                               ('/empty/', 404), ('/escape.txt', 404)]:
+                               ('/empty/', 404), ('/escape.txt', 404), ('/env-alias.txt', 404)]:
             conn = http.client.HTTPConnection('127.0.0.1', result['port'], timeout=2)
             conn.request('GET', path)
             response = conn.getresponse()
