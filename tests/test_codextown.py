@@ -64,6 +64,15 @@ class TownTests(unittest.TestCase):
         self.assertEqual(cmd[cmd.index('-m') + 1], 'gpt-5.6-luna')
         self.assertIn('model_reasoning_effort="low"', cmd)
 
+    def test_skill_budget_notice_does_not_fail_a_completed_turn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            events = [{'type': 'item.completed', 'item': {'type': 'error',
+                       'message': 'Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill.'}},
+                      {'type': 'turn.completed'}]
+            with patch.object(town.subprocess, 'Popen', self.fake_process(events, p/'worker.txt')):
+                self.assertEqual(town.invoke(p, 'worker', 'task', p, 1), 'done')
+
     def test_timeout_terminates_process_group(self):
         with tempfile.TemporaryDirectory() as tmp:
             proc = Mock(pid=12345)
