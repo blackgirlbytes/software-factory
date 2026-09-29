@@ -1,0 +1,106 @@
+what about the commands to run a sprite and do this stuff on your own without an agent
+
+---
+
+what are the workers
+
+---
+
+okay look up blog posts by flyio..read some of the recent ones
+
+---
+
+im trying to write a blog post in that voice..is this a good outline idk
+
+
+
+
+
+
+
+- Goose town/glasstown/gas town 
+
+Maddening read and maddening setup ..even Steve egg describes gas town as an industrialized coding factory manned by super intelligent robot chimps but right now its like a late 1800s factory that can disembowel you if you’re not careful.,
+
+
+
+In the very near future devs will become shepherds, tending flocks of agents, which do ground-level work. 
+
+
+
+Goosetown
+
+
+
+I made Glass Town as the name suggests a not dark factory/ dimly lit/ transparent and it all runs inside a sprite. 
+
+
+
+Let’s start with what a sprite even is and why im running it there. \
+&#x20;\
+&#x20;
+
+Here’s how Glasstown is designed : We have a planner, builder, tutorial writer, reviewer, previewer all inside a sprite
+
+Codex running in a sprite, entire sessions tracking, cheap models luna because it was wasting all my tokens
+
+
+
+
+
+Here’s what glass town built — putting it to the test
+
+
+
+
+
+Town wall
+
+
+
+Etc 
+
+
+
+My agent can run this for me sprite mcp server, but I can also run it from the cli..heres how
+
+
+
+What do I get out of it..whats the value
+
+---
+
+title of it is welcome to glass town..it should start with steve yegges quotes and how everyone is making software factory so obviously i am too.&#x20;
+
+
+
+Ive already played around with factories in the past used one called goosetown, but i wanted to make a version that wasnt a dark factory -- steve yegge quote on dark factories like defining what they are..i wanted one that was transparent..hence the name glasstown.  it could possibly make my devrelwork easier. talk about the workflow.
+
+
+
+and just for a sprinkle of an extra challenge..my factory wouldnt run on my computer. it would run in a sprite..here's why..blah blah Introduce Sprites through what you needed: a remote computer where tools and projects persist, and where you can run the resulting app.
+
+Then explain the tunnel using your own moment of understanding: the app server is in the Sprite, but Chrome reaches it through localhost. Include a small command example. That makes the infrastructure tangible.
+
+
+
+different workers..and their jobs
+
+
+
+but does my factory actually work..
+
+air piano.
+
+
+
+1. **Here’s how I run it myself.**
+
+   Show one command to submit work and one to reopen a preview. Explain that you can use the CLI without this coordinating chat, while Glasstown still invokes agents internally. Link the full cookbook instead of putting every setup command in the article.
+2. **What I actually got out of this.**
+
+   Answer with evidence: a reusable workflow, a working prototype, inspectable history, and fewer infrastructure instructions to repeat. Then name the remaining work: repairs still needed supervision, real-hand responsiveness still needed testing, and you haven’t measured total cost.
+
+---
+
+this should be around 1500 words..not of slop...each sentence valuable
