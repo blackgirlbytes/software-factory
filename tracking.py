@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from urllib.parse import urlsplit
 
 BEGIN = '<!-- codextown:tracking -->'
 END = '<!-- /codextown:tracking -->'
@@ -227,3 +228,28 @@ def hook_profile(repo, config_dir=None):
 def finish_tracking(repo, tracking):
     # Pre-push syncs session records after final worker/reviewer hook events.
     git(repo, 'push', tracking['remote'], 'HEAD:refs/heads/' + tracking['branch'])
+
+
+def result_links(repo, tracking):
+    """Build browser links from Git metadata without exposing remote credentials."""
+    remote = git(repo, 'remote', 'get-url', '--push', tracking['remote'])
+    if remote.startswith('git@github.com:'):
+        path = remote[len('git@github.com:'):]
+    else:
+        parsed = urlsplit(remote)
+        if parsed.scheme not in ('https', 'ssh') or parsed.hostname != 'github.com':
+            return {}
+        path = parsed.path.lstrip('/')
+    path = path.removesuffix('.git')
+    # Reconstruct from safe owner/repo components; never return the raw remote.
+    if not re.fullmatch(r'[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+', path):
+        return {}
+    head = git(repo, 'rev-parse', 'HEAD')
+    if not re.fullmatch(r'[0-9a-f]{40,64}', head):
+        return {}
+    github = 'https://github.com/' + path
+    entire = 'https://entire.io/gh/' + path
+    message = git(repo, 'show', '-s', '--format=%B', head)
+    if re.search(r'^Entire-Checkpoint: (?:[0-9a-f]{12}|[0-9A-HJKMNP-TV-Z]{26})\s*$', message, re.M):
+        entire += '/commit/' + head
+    return {'github': github, 'commit': github + '/commit/' + head, 'entire': entire}
